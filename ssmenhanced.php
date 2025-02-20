@@ -304,6 +304,21 @@ class SSM_Plugin {
 
         $action = isset($_GET['action']) ? sanitize_text_field($_GET['action']) : '';
 
+        // Process deletion if action=delete.
+        if ( $action === 'delete' && isset( $_GET['id'] ) ) {
+            $product_id = intval( $_GET['id'] );
+            $result = $wpdb->delete( $table_products, [ 'id' => $product_id ] );
+            if ( $result !== false ) {
+                // Also remove any category relationships for this product.
+                $wpdb->delete( $table_rel, [ 'product_id' => $product_id ] );
+                echo '<div class="updated"><p>Product deleted successfully.</p></div>';
+            } else {
+                echo '<div class="error"><p>Product deletion failed.</p></div>';
+            }
+            // Reset action to display the listing after deletion.
+            $action = '';
+        }
+
         // Process form submission for add/edit.
         if ( isset( $_POST['ssm_product_submit'] ) ) {
             $name                   = sanitize_text_field( $_POST['name'] );
@@ -355,7 +370,7 @@ class SSM_Plugin {
                     ],
                     [ 'id' => $product_id ]
                 );
-                // Update categories: Clear existing then reinsert.
+                // Update category relationships: clear existing then reinsert.
                 $wpdb->delete( $table_rel, [ 'product_id' => $product_id ] );
                 foreach ( $categories as $cat_id ) {
                     $wpdb->insert(
@@ -370,7 +385,7 @@ class SSM_Plugin {
             }
         }
 
-        // Check if we're in add/edit mode.
+        // If in add/edit mode, display the form.
         if ( $action === 'add' || $action === 'edit' ) {
             $product    = null;
             $product_id = 0;
@@ -452,7 +467,7 @@ class SSM_Plugin {
             return;
         }
 
-        // If no add/edit action, display the products listing.
+        // Default mode: List products.
         $search = isset( $_GET['ssm_search'] ) ? sanitize_text_field( $_GET['ssm_search'] ) : '';
         $where  = '';
         if ( $search ) {
@@ -486,7 +501,7 @@ class SSM_Plugin {
                                 <td>$<?php echo number_format( $p->price, 2 ); ?></td>
                                 <td><?php echo $p->subscription ? 'Yes' : 'No'; ?></td>
                                 <td>
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=edit&id=' . $p->id ); ?>">Edit</a> |
+                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=edit&id=' . $p->id ); ?>">Edit</a> | 
                                     <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=delete&id=' . $p->id ); ?>" onclick="return confirm('Are you sure?');">Delete</a>
                                 </td>
                             </tr>
@@ -500,6 +515,7 @@ class SSM_Plugin {
         </div>
         <?php
     }
+
 
 
     /**

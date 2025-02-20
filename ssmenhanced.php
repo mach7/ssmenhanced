@@ -508,24 +508,33 @@ class SSM_Plugin {
     public function render_categories_page() {
         global $wpdb;
         $table_categories = $wpdb->prefix . self::CATEGORY_TABLE;
-        $action = isset($_GET['action']) ? sanitize_text_field( $_GET['action'] ) : '';
+        $table_rel = $wpdb->prefix . self::PRODUCT_CAT_REL_TABLE;
+        $action = isset( $_GET['action'] ) ? sanitize_text_field( $_GET['action'] ) : '';
+
+        // Process deletion if action=delete.
+        if ( $action === 'delete' && isset( $_GET['id'] ) ) {
+            $cat_id = intval( $_GET['id'] );
+            $result = $wpdb->delete( $table_categories, [ 'id' => $cat_id ] );
+            if ( $result !== false ) {
+                // Also remove relationships with products.
+                $wpdb->delete( $table_rel, [ 'category_id' => $cat_id ] );
+                echo '<div class="updated"><p>Category deleted successfully.</p></div>';
+            } else {
+                echo '<div class="error"><p>Category deletion failed.</p></div>';
+            }
+            // Reset action to display the listing after deletion.
+            $action = '';
+        }
 
         // Process form submission for add/edit.
         if ( isset( $_POST['ssm_category_submit'] ) ) {
             $cat_name = sanitize_text_field( $_POST['name'] );
             if ( $action === 'add' ) {
-                $wpdb->insert(
-                    $table_categories,
-                    [ 'name' => $cat_name ]
-                );
+                $wpdb->insert( $table_categories, [ 'name' => $cat_name ] );
                 echo '<div class="updated"><p>Category added successfully.</p></div>';
             } elseif ( $action === 'edit' && isset( $_GET['id'] ) ) {
                 $cat_id = intval( $_GET['id'] );
-                $wpdb->update(
-                    $table_categories,
-                    [ 'name' => $cat_name ],
-                    [ 'id' => $cat_id ]
-                );
+                $wpdb->update( $table_categories, [ 'name' => $cat_name ], [ 'id' => $cat_id ] );
                 echo '<div class="updated"><p>Category updated successfully.</p></div>';
             }
         }
@@ -595,6 +604,8 @@ class SSM_Plugin {
         </div>
         <?php
     }
+
+
 
 
     /**

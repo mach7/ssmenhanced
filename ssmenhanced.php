@@ -19,23 +19,28 @@ class SSM_Plugin {
     public function __construct() {
         // Activation hook
         register_activation_hook( __FILE__, [ $this, 'activate' ] );
-
+    
         // Cron job scheduling for renewal reminders
         add_action( 'ssm_daily_cron', [ $this, 'send_renewal_reminders' ] );
         if ( ! wp_next_scheduled( 'ssm_daily_cron' ) ) {
             wp_schedule_event( time(), 'daily', 'ssm_daily_cron' );
         }
-
+    
         // Check for Stripe webhook calls (via query parameter)
         add_action( 'init', [ $this, 'maybe_handle_stripe_webhook' ] );
-
+    
         // Register shortcodes
         add_shortcode( 'ssm_add_to_cart', [ $this, 'ssm_add_to_cart_shortcode' ] );
         add_shortcode( 'ssm_subscription_account', [ $this, 'ssm_subscription_account_shortcode' ] );
-
+    
         // Add admin menus
         add_action( 'admin_menu', [ $this, 'register_admin_menus' ] );
+    
+        // Register AJAX handlers for "add to cart"
+        add_action( 'wp_ajax_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
+        add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
     }
+    
 
     /**
      * Plugin activation: create necessary tables.
@@ -77,6 +82,39 @@ class SSM_Plugin {
             PRIMARY KEY (product_id, category_id)
         ) $charset_collate;";
         dbDelta( $sql3 );
+    }
+    /**
+     * AJAX handler for adding a product to the cart.
+     */
+    public function ajax_add_to_cart() {
+        // Check for a valid product_id in the POST data.
+        $product_id = isset( $_POST['product_id'] ) ? intval( $_POST['product_id'] ) : 0;
+        if ( ! $product_id ) {
+            wp_send_json_error( 'Invalid product.' );
+        }
+
+        // Start session if not already started.
+        if ( ! session_id() ) {
+            session_start();
+        }
+
+        // Initialize the cart session variable if it doesn't exist.
+        if ( ! isset( $_SESSION['ssm_cart'] ) ) {
+            $_SESSION['ssm_cart'] = [];
+        }
+
+        // Add the product to the cart (or increase quantity if already added).
+        if ( ! isset( $_SESSION['ssm_cart'][ $product_id ] ) ) {
+            $_SESSION['ssm_cart'][ $product_id ] = 1;
+        } else {
+            $_SESSION['ssm_cart'][ $product_id ]++;
+        }
+
+        // For this example, calculate cart total as the sum of quantities.
+        $cart_total = array_sum( $_SESSION['ssm_cart'] );
+
+        // Send a JSON response with the cart total.
+        wp_send_json_success( [ 'cart_total' => $cart_total ] );
     }
 
     /**
@@ -798,5 +836,6 @@ add_action( 'wp_enqueue_scripts', function() {
         'ajax_url' => admin_url( 'admin-ajax.php' ),
     ] );
 } );
+
 
 new SSM_Plugin();

@@ -503,12 +503,66 @@ class SSM_Plugin {
 
 
     /**
-     * Render the categories admin page.
+     * Render the Categories admin page.
      */
     public function render_categories_page() {
         global $wpdb;
-        $table = $wpdb->prefix . self::CATEGORY_TABLE;
-        $categories = $wpdb->get_results( "SELECT * FROM $table ORDER BY name" );
+        $table_categories = $wpdb->prefix . self::CATEGORY_TABLE;
+        $action = isset($_GET['action']) ? sanitize_text_field( $_GET['action'] ) : '';
+
+        // Process form submission for add/edit.
+        if ( isset( $_POST['ssm_category_submit'] ) ) {
+            $cat_name = sanitize_text_field( $_POST['name'] );
+            if ( $action === 'add' ) {
+                $wpdb->insert(
+                    $table_categories,
+                    [ 'name' => $cat_name ]
+                );
+                echo '<div class="updated"><p>Category added successfully.</p></div>';
+            } elseif ( $action === 'edit' && isset( $_GET['id'] ) ) {
+                $cat_id = intval( $_GET['id'] );
+                $wpdb->update(
+                    $table_categories,
+                    [ 'name' => $cat_name ],
+                    [ 'id' => $cat_id ]
+                );
+                echo '<div class="updated"><p>Category updated successfully.</p></div>';
+            }
+        }
+
+        // If in add/edit mode, display the form.
+        if ( $action === 'add' || $action === 'edit' ) {
+            $category = null;
+            $cat_id = 0;
+            if ( $action === 'edit' && isset( $_GET['id'] ) ) {
+                $cat_id = intval( $_GET['id'] );
+                $category = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_categories WHERE id = %d", $cat_id ) );
+                if ( ! $category ) {
+                    echo '<div class="error"><p>Category not found.</p></div>';
+                    return;
+                }
+            }
+            ?>
+            <div class="wrap">
+                <h1><?php echo ( $action === 'add' ) ? 'Add New Category' : 'Edit Category'; ?></h1>
+                <form method="post">
+                    <table class="form-table">
+                        <tr>
+                            <th><label for="ssm_category_name">Category Name</label></th>
+                            <td>
+                                <input type="text" name="name" id="ssm_category_name" value="<?php echo $category ? esc_attr( $category->name ) : ''; ?>" required>
+                            </td>
+                        </tr>
+                    </table>
+                    <?php submit_button( ( $action === 'add' ) ? 'Add Category' : 'Update Category', 'primary', 'ssm_category_submit' ); ?>
+                </form>
+            </div>
+            <?php
+            return;
+        }
+
+        // Default mode: List categories.
+        $categories = $wpdb->get_results( "SELECT * FROM $table_categories ORDER BY name" );
         ?>
         <div class="wrap">
             <h1>Product Categories</h1>
@@ -527,8 +581,8 @@ class SSM_Plugin {
                                 <td><?php echo esc_html( $cat->id ); ?></td>
                                 <td><?php echo esc_html( $cat->name ); ?></td>
                                 <td>
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=edit&id=' . $cat->id ); ?>">Edit</a> | 
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=delete&id=' . $cat->id ); ?>" onclick="return confirm('Are you sure?');">Delete</a>
+                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=edit&id=' . $cat->id ); ?>">Edit</a> |
+                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=delete&id=' . $cat->id ); ?>" onclick="return confirm('Are you sure you want to delete this category?');">Delete</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -541,6 +595,7 @@ class SSM_Plugin {
         </div>
         <?php
     }
+
 
     /**
      * Render the API Key Management admin page.

@@ -148,6 +148,9 @@ class SSM_Plugin {
         // Register AJAX handlers for "add to cart"
         add_action( 'wp_ajax_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
         add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
+        add_action('wp_ajax_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ]);
+        add_action('wp_ajax_nopriv_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ]);
+
     }
     
     /**
@@ -391,6 +394,25 @@ class SSM_Plugin {
         <?php
         return ob_get_clean();
     }
+    public function ajax_update_cart_quantity() {
+        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+        $quantity = isset($_POST['quantity']) ? intval($_POST['quantity']) : 1;
+        if (!$product_id) {
+            wp_send_json_error('Invalid product.');
+        }
+        $_SESSION['ssm_cart'][$product_id] = $quantity;
+        // Recalculate total price
+        global $wpdb;
+        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+        $total_price = 0;
+        foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
+            $product = $wpdb->get_row($wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $pid));
+            if ($product) {
+                $total_price += $product->price * $qty;
+            }
+        }
+        wp_send_json_success(['total_price' => $total_price]);
+    }
     
     /**
      * Shortcode to show the checkout page.
@@ -398,17 +420,15 @@ class SSM_Plugin {
      */
     public function ssm_checkout_shortcode() {
         // Session is already started on init.
-    
-        // Check if the cart exists and is not empty.
         if ( empty( $_SESSION['ssm_cart'] ) ) {
             return '<p>Your cart is empty.</p>';
         }
-    
+        
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
         $cart_items = $_SESSION['ssm_cart'];
         $total_price = 0;
-    
+        
         ob_start();
         ?>
         <div class="ssm-checkout">
@@ -417,7 +437,7 @@ class SSM_Plugin {
                 <thead>
                     <tr>
                         <th style="border-bottom:1px solid #ccc; text-align:left; padding:8px;">Product</th>
-                        <th style="border-bottom:1px solid #ccc; text-align:right; padding:8px;">Quantity</th>
+                        <th style="border-bottom:1px solid #ccc; text-align:center; padding:8px;">Quantity</th>
                         <th style="border-bottom:1px solid #ccc; text-align:right; padding:8px;">Price</th>
                         <th style="border-bottom:1px solid #ccc; text-align:right; padding:8px;">Subtotal</th>
                     </tr>
@@ -432,9 +452,13 @@ class SSM_Plugin {
                         $subtotal = $product->price * $quantity;
                         $total_price += $subtotal;
                         ?>
-                        <tr>
+                        <tr data-product-id="<?php echo esc_attr( $product->id ); ?>">
                             <td style="padding:8px;"><?php echo esc_html( $product->name ); ?></td>
-                            <td style="padding:8px; text-align:right;"><?php echo intval( $quantity ); ?></td>
+                            <td style="padding:8px; text-align:center;">
+                                <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr( $product->id ); ?>">-</button>
+                                <input type="text" value="<?php echo intval( $quantity ); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr( $product->id ); ?>" style="width:40px; text-align:center;" />
+                                <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr( $product->id ); ?>">+</button>
+                            </td>
                             <td style="padding:8px; text-align:right;">$<?php echo number_format( $product->price, 2 ); ?></td>
                             <td style="padding:8px; text-align:right;">$<?php echo number_format( $subtotal, 2 ); ?></td>
                         </tr>
@@ -443,19 +467,18 @@ class SSM_Plugin {
                     ?>
                 </tbody>
             </table>
-            <p style="font-weight:bold; padding:8px;">Total: $<?php echo number_format( $total_price, 2 ); ?></p>
+            <p class="ssm-total" style="font-weight:bold; padding:8px;">Total: $<?php echo number_format( $total_price, 2 ); ?></p>
             <button id="ssm-proceed-checkout" class="button button-primary">Proceed to Checkout</button>
         </div>
         <script>
-        // Basic click handler for the "Proceed to Checkout" button.
         document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
-            // Redirect to a payment processing page (adjust URL as needed).
             window.location.href = "<?php echo esc_url( site_url( '/checkout-page/' ) ); ?>";
         });
         </script>
         <?php
         return ob_get_clean();
     }
+
     
     /**
      * Shortcode to show customer's subscription account page.

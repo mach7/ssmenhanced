@@ -32,8 +32,8 @@ add_action('plugins_loaded', function () {
                         $icon_url = plugins_url('assets/logo-128x128.png', __FILE__);
                         $transient->response[$plugin_slug]->icons = [
                             'default' => $icon_url,
-                            '1x' => $icon_url,
-                            '2x' => plugins_url('assets/logo-256x256.png', __FILE__),
+                            '1x'      => $icon_url,
+                            '2x'      => plugins_url('assets/logo-256x256.png', __FILE__),
                         ];
                     }
                 }
@@ -133,6 +133,7 @@ class SSM_Plugin {
         // Register shortcodes
         add_shortcode( 'ssm_add_to_cart', [ $this, 'ssm_add_to_cart_shortcode' ] );
         add_shortcode( 'ssm_subscription_account', [ $this, 'ssm_subscription_account_shortcode' ] );
+        add_shortcode( 'ssm_checkout', [ $this, 'ssm_checkout_shortcode' ] );
     
         // Add admin menus
         add_action( 'admin_menu', [ $this, 'register_admin_menus' ] );
@@ -390,6 +391,74 @@ class SSM_Plugin {
     }
     
     /**
+     * Shortcode to show the checkout page.
+     * Usage: [ssm_checkout]
+     */
+    public function ssm_checkout_shortcode() {
+        // Start session if not already started.
+        if ( ! session_id() ) {
+            session_start();
+        }
+    
+        // Check if the cart exists and is not empty.
+        if ( empty( $_SESSION['ssm_cart'] ) ) {
+            return '<p>Your cart is empty.</p>';
+        }
+    
+        global $wpdb;
+        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+        $cart_items = $_SESSION['ssm_cart'];
+        $total_price = 0;
+    
+        ob_start();
+        ?>
+        <div class="ssm-checkout">
+            <h2>Your Cart</h2>
+            <table class="ssm-cart-table" style="width:100%; border-collapse: collapse;">
+                <thead>
+                    <tr>
+                        <th style="border-bottom:1px solid #ccc; text-align:left; padding:8px;">Product</th>
+                        <th style="border-bottom:1px solid #ccc; text-align:right; padding:8px;">Quantity</th>
+                        <th style="border-bottom:1px solid #ccc; text-align:right; padding:8px;">Price</th>
+                        <th style="border-bottom:1px solid #ccc; text-align:right; padding:8px;">Subtotal</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php
+                    foreach ( $cart_items as $product_id => $quantity ) {
+                        $product = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
+                        if ( ! $product ) {
+                            continue;
+                        }
+                        $subtotal = $product->price * $quantity;
+                        $total_price += $subtotal;
+                        ?>
+                        <tr>
+                            <td style="padding:8px;"><?php echo esc_html( $product->name ); ?></td>
+                            <td style="padding:8px; text-align:right;"><?php echo intval( $quantity ); ?></td>
+                            <td style="padding:8px; text-align:right;">$<?php echo number_format( $product->price, 2 ); ?></td>
+                            <td style="padding:8px; text-align:right;">$<?php echo number_format( $subtotal, 2 ); ?></td>
+                        </tr>
+                        <?php
+                    }
+                    ?>
+                </tbody>
+            </table>
+            <p style="font-weight:bold; padding:8px;">Total: $<?php echo number_format( $total_price, 2 ); ?></p>
+            <button id="ssm-proceed-checkout" class="button button-primary">Proceed to Checkout</button>
+        </div>
+        <script>
+        // Basic click handler for the "Proceed to Checkout" button.
+        document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
+            // Redirect to a payment processing page (adjust URL as needed).
+            window.location.href = "<?php echo esc_url( site_url( '/checkout-page/' ) ); ?>";
+        });
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+    
+    /**
      * Shortcode to show customer's subscription account page.
      * This page allows customers to upgrade/downgrade their subscription.
      */
@@ -400,7 +469,7 @@ class SSM_Plugin {
         <div class="ssm-subscription-account">
             <h2>Your Subscription</h2>
             <?php
-            // Here you would retrieve current subscription info for the logged-in user.
+            // Retrieve current subscription info for the logged-in user.
             $user_id = get_current_user_id();
             $api_key = get_user_meta( $user_id, 'ssm_api_key', true );
             $expiry  = get_user_meta( $user_id, 'ssm_api_key_expiry', true );
@@ -685,7 +754,7 @@ class SSM_Plugin {
         global $wpdb;
         $table_categories = $wpdb->prefix . self::CATEGORY_TABLE;
         $table_rel = $wpdb->prefix . self::PRODUCT_CAT_REL_TABLE;
-        $action = isset( $_GET['action'] ) ? sanitize_text_field( $_GET['action'] ) : '';
+        $action = isset( $_GET['action'] ) ? sanitize_text_field($_GET['action']) : '';
 
         // Process deletion if action=delete.
         if ( $action === 'delete' && isset( $_GET['id'] ) ) {
@@ -890,6 +959,8 @@ if ( file_exists( $log_file ) ) {
             <p>Use the Products and Categories pages to add, edit, delete, and filter products and categories. Products include attributes such as name, description, price, digital flag, subscription flag, subscription interval, and subscription price.</p>
             <h2>Shortcode Integration</h2>
             <p>Embed products in your posts/pages using the <code>[ssm_add_to_cart product_id="123"]</code> shortcode.</p>
+            <h2>Checkout</h2>
+            <p>Add the <code>[ssm_checkout]</code> shortcode to a page to display the cart summary and a "Proceed to Checkout" button.</p>
             <h2>Stripe Webhook & API Key Management</h2>
             <p>Stripe events are handled on-site. On a successful subscription, the plugin automatically creates or updates an API key. Subscription cancellations and payment failures trigger API key expiration. Manual controls are available in the API Key Management page.</p>
             <h2>Subscription Management</h2>

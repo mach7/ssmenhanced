@@ -298,18 +298,167 @@ class SSM_Plugin {
      */
     public function render_products_page() {
         global $wpdb;
-        $table = $wpdb->prefix . self::PRODUCT_TABLE;
+        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+        $table_rel      = $wpdb->prefix . self::PRODUCT_CAT_REL_TABLE;
+        $table_cats     = $wpdb->prefix . self::CATEGORY_TABLE;
 
-        // Process form submissions for add/edit/delete here...
-        // (For brevity, only a simplified listing is shown.)
+        $action = isset($_GET['action']) ? sanitize_text_field($_GET['action']) : '';
 
+        // Process form submission for add/edit.
+        if ( isset( $_POST['ssm_product_submit'] ) ) {
+            $name                   = sanitize_text_field( $_POST['name'] );
+            $description            = sanitize_textarea_field( $_POST['description'] );
+            $price                  = floatval( $_POST['price'] );
+            $digital                = isset( $_POST['digital'] ) ? 1 : 0;
+            $subscription           = isset( $_POST['subscription'] ) ? 1 : 0;
+            $subscription_interval  = sanitize_text_field( $_POST['subscription_interval'] );
+            $subscription_price     = floatval( $_POST['subscription_price'] );
+            $categories             = isset( $_POST['categories'] ) ? (array) $_POST['categories'] : array();
+
+            if ( $action === 'add' ) {
+                $wpdb->insert(
+                    $table_products,
+                    [
+                        'name'                   => $name,
+                        'description'            => $description,
+                        'price'                  => $price,
+                        'digital'                => $digital,
+                        'subscription'           => $subscription,
+                        'subscription_interval'  => $subscription_interval,
+                        'subscription_price'     => $subscription_price,
+                    ]
+                );
+                $new_product_id = $wpdb->insert_id;
+                // Insert category relationships.
+                foreach ( $categories as $cat_id ) {
+                    $wpdb->insert(
+                        $table_rel,
+                        [
+                            'product_id'  => $new_product_id,
+                            'category_id' => intval( $cat_id ),
+                        ]
+                    );
+                }
+                echo '<div class="updated"><p>Product added successfully.</p></div>';
+            } elseif ( $action === 'edit' && isset( $_GET['id'] ) ) {
+                $product_id = intval( $_GET['id'] );
+                $wpdb->update(
+                    $table_products,
+                    [
+                        'name'                   => $name,
+                        'description'            => $description,
+                        'price'                  => $price,
+                        'digital'                => $digital,
+                        'subscription'           => $subscription,
+                        'subscription_interval'  => $subscription_interval,
+                        'subscription_price'     => $subscription_price,
+                    ],
+                    [ 'id' => $product_id ]
+                );
+                // Update categories: Clear existing then reinsert.
+                $wpdb->delete( $table_rel, [ 'product_id' => $product_id ] );
+                foreach ( $categories as $cat_id ) {
+                    $wpdb->insert(
+                        $table_rel,
+                        [
+                            'product_id'  => $product_id,
+                            'category_id' => intval( $cat_id ),
+                        ]
+                    );
+                }
+                echo '<div class="updated"><p>Product updated successfully.</p></div>';
+            }
+        }
+
+        // Check if we're in add/edit mode.
+        if ( $action === 'add' || $action === 'edit' ) {
+            $product    = null;
+            $product_id = 0;
+            if ( $action === 'edit' && isset( $_GET['id'] ) ) {
+                $product_id = intval( $_GET['id'] );
+                $product    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
+                if ( ! $product ) {
+                    echo '<div class="error"><p>Product not found.</p></div>';
+                    return;
+                }
+            }
+
+            // Retrieve assigned categories if editing.
+            $assigned_categories = array();
+            if ( $product ) {
+                $assigned_categories = $wpdb->get_col( $wpdb->prepare( "SELECT category_id FROM $table_rel WHERE product_id = %d", $product_id ) );
+            }
+
+            // Retrieve all available categories.
+            $all_categories = $wpdb->get_results( "SELECT * FROM $table_cats ORDER BY name", ARRAY_A );
+            ?>
+            <div class="wrap">
+                <h1><?php echo ( $action === 'add' ) ? 'Add New Product' : 'Edit Product'; ?></h1>
+                <form method="post">
+                    <table class="form-table">
+                        <tr>
+                            <th><label for="ssm_product_name">Product Name</label></th>
+                            <td><input type="text" name="name" id="ssm_product_name" value="<?php echo $product ? esc_attr( $product->name ) : ''; ?>" required></td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_product_description">Description</label></th>
+                            <td><textarea name="description" id="ssm_product_description" rows="5" cols="50"><?php echo $product ? esc_textarea( $product->description ) : ''; ?></textarea></td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_product_price">Price</label></th>
+                            <td><input type="number" step="0.01" name="price" id="ssm_product_price" value="<?php echo $product ? esc_attr( $product->price ) : ''; ?>" required></td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_product_digital">Digital Product</label></th>
+                            <td><input type="checkbox" name="digital" id="ssm_product_digital" <?php checked( $product && $product->digital, 1 ); ?>></td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_product_subscription">Subscription Product</label></th>
+                            <td><input type="checkbox" name="subscription" id="ssm_product_subscription" <?php checked( $product && $product->subscription, 1 ); ?>></td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_subscription_interval">Subscription Interval</label></th>
+                            <td>
+                                <select name="subscription_interval" id="ssm_subscription_interval">
+                                    <option value="monthly" <?php selected( $product ? $product->subscription_interval : '', 'monthly' ); ?>>Monthly</option>
+                                    <option value="yearly" <?php selected( $product ? $product->subscription_interval : '', 'yearly' ); ?>>Yearly</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_subscription_price">Subscription Price</label></th>
+                            <td><input type="number" step="0.01" name="subscription_price" id="ssm_subscription_price" value="<?php echo $product ? esc_attr( $product->subscription_price ) : ''; ?>"></td>
+                        </tr>
+                        <tr>
+                            <th>Categories</th>
+                            <td>
+                                <?php if ( $all_categories ) : ?>
+                                    <?php foreach ( $all_categories as $cat ) : ?>
+                                        <label style="display:block;">
+                                            <input type="checkbox" name="categories[]" value="<?php echo intval( $cat['id'] ); ?>" <?php if ( in_array( $cat['id'], $assigned_categories ) ) echo 'checked'; ?>>
+                                            <?php echo esc_html( $cat['name'] ); ?>
+                                        </label>
+                                    <?php endforeach; ?>
+                                <?php else : ?>
+                                    <p>No categories available. Please add categories first.</p>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    </table>
+                    <?php submit_button( ( $action === 'add' ) ? 'Add Product' : 'Update Product', 'primary', 'ssm_product_submit' ); ?>
+                </form>
+            </div>
+            <?php
+            return;
+        }
+
+        // If no add/edit action, display the products listing.
         $search = isset( $_GET['ssm_search'] ) ? sanitize_text_field( $_GET['ssm_search'] ) : '';
-        $where = '';
+        $where  = '';
         if ( $search ) {
             $where = $wpdb->prepare( "WHERE name LIKE %s", '%' . $wpdb->esc_like( $search ) . '%' );
         }
-        $products = $wpdb->get_results( "SELECT * FROM $table $where ORDER BY id DESC" );
-
+        $products = $wpdb->get_results( "SELECT * FROM $table_products $where ORDER BY id DESC" );
         ?>
         <div class="wrap">
             <h1>Products</h1>
@@ -337,7 +486,7 @@ class SSM_Plugin {
                                 <td>$<?php echo number_format( $p->price, 2 ); ?></td>
                                 <td><?php echo $p->subscription ? 'Yes' : 'No'; ?></td>
                                 <td>
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=edit&id=' . $p->id ); ?>">Edit</a> | 
+                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=edit&id=' . $p->id ); ?>">Edit</a> |
                                     <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=delete&id=' . $p->id ); ?>" onclick="return confirm('Are you sure?');">Delete</a>
                                 </td>
                             </tr>
@@ -351,6 +500,7 @@ class SSM_Plugin {
         </div>
         <?php
     }
+
 
     /**
      * Render the categories admin page.

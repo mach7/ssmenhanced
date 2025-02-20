@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', function () {
     addToCartButtons.forEach(function (button) {
         button.addEventListener('click', function (event) {
             event.preventDefault();
+
             const productElement = button.closest('.ssm-product');
             if (!productElement) {
                 console.error('Product container element not found.');
@@ -14,29 +15,36 @@ document.addEventListener('DOMContentLoaded', function () {
                 console.error('Product ID not found in the data attributes.');
                 return;
             }
+
             button.disabled = true;
             const originalText = button.textContent;
             button.textContent = 'Adding...';
+
             const formData = new FormData();
             formData.append('action', 'ssm_add_to_cart');
             formData.append('product_id', productId);
+
             fetch(ssm_params.ajax_url, {
                 method: 'POST',
                 credentials: 'same-origin',
                 body: formData
             })
             .then(response => response.json())
-            .then(data => {
-                if (data.success) {
+            .then(json => {
+                // WordPress returns { success: bool, data: {...} }
+                if (json.success) {
+                    // "cart_total" is inside json.data
+                    const result = json.data;
                     button.textContent = 'Added';
-                    if (typeof data.cart_total !== 'undefined') {
+                    if (typeof result.cart_total !== 'undefined') {
                         const cartCounter = document.querySelector('.ssm-cart-counter');
                         if (cartCounter) {
-                            cartCounter.textContent = data.cart_total;
+                            cartCounter.textContent = result.cart_total;
                         }
                     }
                 } else {
-                    const errorMsg = data.data || 'An unexpected error occurred.';
+                    // "json.data" might hold an error message
+                    const errorMsg = (json.data) ? json.data : 'An unexpected error occurred.';
                     console.error('Error adding product to cart:', errorMsg);
                     button.textContent = 'Error';
                     alert('Error: ' + errorMsg);
@@ -62,26 +70,34 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('action', 'ssm_update_cart_quantity');
         formData.append('product_id', productId);
         formData.append('quantity', newQuantity);
+
         fetch(ssm_params.ajax_url, {
             method: 'POST',
             credentials: 'same-origin',
             body: formData
         })
         .then(response => response.json())
-        .then(data => {
-            if (data.success) {
+        .then(json => {
+            // WordPress returns { success: bool, data: {...} }
+            if (json.success) {
+                const result = json.data;
+                // Update the input field
                 qtyElement.value = newQuantity;
+
+                // Update product subtotal in the current row
                 const row = qtyElement.closest('tr');
                 const subtotalCell = row.querySelector('.ssm-subtotal');
-                if (subtotalCell && data.product_subtotal !== undefined) {
-                    subtotalCell.textContent = '$' + parseFloat(data.product_subtotal).toFixed(2);
+                if (subtotalCell && typeof result.product_subtotal !== 'undefined') {
+                    subtotalCell.textContent = '$' + parseFloat(result.product_subtotal).toFixed(2);
                 }
+
+                // Update overall total
                 const totalDisplay = document.querySelector('.ssm-total');
-                if (totalDisplay && data.total_price !== undefined) {
-                    totalDisplay.textContent = 'Total: $' + parseFloat(data.total_price).toFixed(2);
+                if (totalDisplay && typeof result.total_price !== 'undefined') {
+                    totalDisplay.textContent = 'Total: $' + parseFloat(result.total_price).toFixed(2);
                 }
             } else {
-                const errorMsg = data.data || 'Failed to update quantity.';
+                const errorMsg = (json.data) ? json.data : 'Failed to update quantity.';
                 console.error('Error updating quantity:', errorMsg);
                 alert('Error: ' + errorMsg);
             }
@@ -99,7 +115,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const productId = button.getAttribute('data-product-id');
             const row = button.closest('tr');
             const qtyInput = row.querySelector('.ssm-qty-input');
-            let currentQty = parseInt(qtyInput.value) || 0;
+            let currentQty = parseInt(qtyInput.value) || 1;
             currentQty++;
             updateQuantity(productId, currentQty, qtyInput);
         });
@@ -112,7 +128,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const productId = button.getAttribute('data-product-id');
             const row = button.closest('tr');
             const qtyInput = row.querySelector('.ssm-qty-input');
-            let currentQty = parseInt(qtyInput.value) || 0;
+            let currentQty = parseInt(qtyInput.value) || 1;
             if (currentQty > 1) {
                 currentQty--;
                 updateQuantity(productId, currentQty, qtyInput);

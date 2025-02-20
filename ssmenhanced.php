@@ -2,7 +2,7 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
-Version: 1.5.3
+Version: 1.5.4
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
@@ -145,12 +145,11 @@ class SSM_Plugin {
         // Add admin menus
         add_action( 'admin_menu', [ $this, 'register_admin_menus' ] );
     
-        // Register AJAX handlers for "add to cart"
+        // Register AJAX handlers
         add_action( 'wp_ajax_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
         add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
-        add_action('wp_ajax_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ]);
-        add_action('wp_ajax_nopriv_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ]);
-
+        add_action( 'wp_ajax_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
+        add_action( 'wp_ajax_nopriv_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
     }
     
     /**
@@ -199,248 +198,249 @@ class SSM_Plugin {
      * AJAX handler for adding a product to the cart.
      */
     public function ajax_add_to_cart() {
-        // Check for a valid product_id in the POST data.
         $product_id = isset( $_POST['product_id'] ) ? intval( $_POST['product_id'] ) : 0;
         if ( ! $product_id ) {
             wp_send_json_error( 'Invalid product.' );
         }
 
-        // (Session is already started on init.)
+        // Ensure cart array
         if ( ! isset( $_SESSION['ssm_cart'] ) ) {
             $_SESSION['ssm_cart'] = [];
         }
 
-        // Add the product to the cart (or increase quantity if already added).
+        // Add/increment
         if ( ! isset( $_SESSION['ssm_cart'][ $product_id ] ) ) {
             $_SESSION['ssm_cart'][ $product_id ] = 1;
         } else {
             $_SESSION['ssm_cart'][ $product_id ]++;
         }
 
-        // For this example, calculate cart total as the sum of quantities.
+        // Sum of all quantities
         $cart_total = array_sum( $_SESSION['ssm_cart'] );
-
-        // Send a JSON response with the cart total.
-        wp_send_json_success( [ 'cart_total' => $cart_total ] );
+        wp_send_json_success([
+            'cart_total' => $cart_total
+        ]);
     }
-    
+
     /**
-     * Check if this is a Stripe webhook call.
+     * AJAX handler to update quantity in the cart.
+     */
+    public function ajax_update_cart_quantity() {
+        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+        $quantity   = isset($_POST['quantity']) ? intval($_POST['quantity']) : 1;
+
+        if ( !$product_id ) {
+            wp_send_json_error('Invalid product.');
+        }
+
+        // Update the session cart
+        $_SESSION['ssm_cart'][$product_id] = $quantity;
+
+        global $wpdb;
+        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+
+        // Calculate the updated product subtotal
+        $product = $wpdb->get_row(
+            $wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $product_id)
+        );
+        $product_subtotal = 0;
+        if ($product) {
+            $product_subtotal = $product->price * $quantity;
+        }
+
+        // Recalculate overall total
+        $total_price = 0;
+        foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
+            $p = $wpdb->get_row(
+                $wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $pid)
+            );
+            if ($p) {
+                $total_price += $p->price * $qty;
+            }
+        }
+
+        wp_send_json_success([
+            'product_subtotal' => $product_subtotal,
+            'total_price'      => $total_price,
+        ]);
+    }
+
+    /**
+     * Possibly handle a Stripe webhook request
      */
     public function maybe_handle_stripe_webhook() {
         if ( isset( $_GET['ssm_webhook'] ) && $_GET['ssm_webhook'] === 'stripe' ) {
             $this->handle_stripe_webhook();
         }
     }
-    
+
     /**
-     * Handle incoming Stripe webhook events.
+     * Handle Stripe events
      */
     public function handle_stripe_webhook() {
-        // Read payload and decode JSON
-        $payload = @file_get_contents( 'php://input' );
-        $event   = json_decode( $payload, true );
+        $payload = @file_get_contents('php://input');
+        $event   = json_decode($payload, true);
 
         if ( json_last_error() !== JSON_ERROR_NONE ) {
             http_response_code(400);
             exit();
         }
 
-        // Example: handle checkout.session.completed for successful subscription
-        if ( isset( $event['type'] ) ) {
+        if ( isset($event['type']) ) {
             switch ( $event['type'] ) {
                 case 'checkout.session.completed':
                     $session = $event['data']['object'];
-                    // Assume metadata includes user_id and product_id
-                    $user_id    = isset( $session['metadata']['user_id'] ) ? intval( $session['metadata']['user_id'] ) : 0;
-                    $product_id = isset( $session['metadata']['product_id'] ) ? intval( $session['metadata']['product_id'] ) : 0;
-                    if ( $user_id && $product_id ) {
-                        $this->process_successful_subscription( $user_id, $product_id );
+                    $user_id    = isset($session['metadata']['user_id']) ? intval($session['metadata']['user_id']) : 0;
+                    $product_id = isset($session['metadata']['product_id']) ? intval($session['metadata']['product_id']) : 0;
+                    if ($user_id && $product_id) {
+                        $this->process_successful_subscription($user_id, $product_id);
                     }
                     break;
 
                 case 'customer.subscription.deleted':
                 case 'invoice.payment_failed':
-                    // On cancellation/failure, expire the API key.
-                    $user_id = isset( $event['data']['object']['metadata']['user_id'] ) ? intval( $event['data']['object']['metadata']['user_id'] ) : 0;
-                    if ( $user_id ) {
-                        $this->expire_api_key( $user_id );
+                    $user_id = isset($event['data']['object']['metadata']['user_id']) ? intval($event['data']['object']['metadata']['user_id']) : 0;
+                    if ($user_id) {
+                        $this->expire_api_key($user_id);
                     }
                     break;
 
                 default:
-                    // Log unhandled event
-                    error_log( '[SSM] Unhandled Stripe event: ' . $event['type'] );
+                    error_log('[SSM] Unhandled Stripe event: ' . $event['type']);
                     break;
             }
         }
         http_response_code(200);
         exit();
     }
-    
+
     /**
-     * Process a successful subscription event.
-     * Create a new API key or update the expiration date.
+     * On successful subscription, create or update API key
      */
-    public function process_successful_subscription( $user_id, $product_id ) {
-        // Retrieve product details to get subscription length
+    public function process_successful_subscription($user_id, $product_id) {
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
-        $product = $wpdb->get_row( $wpdb->prepare( "SELECT subscription_interval FROM $table_products WHERE id = %d", $product_id ) );
-
-        if ( ! $product ) {
-            error_log( '[SSM] Product not found for subscription.' );
+        $product = $wpdb->get_row($wpdb->prepare(
+            "SELECT subscription_interval FROM $table_products WHERE id = %d",
+            $product_id
+        ));
+        if (!$product) {
+            error_log('[SSM] Product not found for subscription.');
             return;
         }
 
-        // Calculate expiration based on subscription interval
-        $expiration_date = current_time( 'mysql' );
-        if ( $product->subscription_interval === 'yearly' ) {
-            $expiration_date = date( 'Y-m-d H:i:s', strtotime( '+1 year' ) );
+        // Decide on expiration date
+        $expiration_date = current_time('mysql');
+        if ($product->subscription_interval === 'yearly') {
+            $expiration_date = date('Y-m-d H:i:s', strtotime('+1 year'));
         } else {
-            $expiration_date = date( 'Y-m-d H:i:s', strtotime( '+1 month' ) );
+            $expiration_date = date('Y-m-d H:i:s', strtotime('+1 month'));
         }
 
-        // Check if user already has an API key (stored as user meta)
-        $existing_key = get_user_meta( $user_id, 'ssm_api_key', true );
-        if ( ! $existing_key ) {
-            // Call API endpoint to create new API key.
-            $response = wp_remote_post( home_url( '/wp-json/akm/v1/key' ), [
+        $existing_key = get_user_meta($user_id, 'ssm_api_key', true);
+        if (!$existing_key) {
+            // Create new
+            $response = wp_remote_post(home_url('/wp-json/akm/v1/key'), [
                 'body' => [
-                    'email'    => get_userdata( $user_id )->user_email,
-                    'api_key'  => wp_generate_password( 32, false ),
+                    'email'    => get_userdata($user_id)->user_email,
+                    'api_key'  => wp_generate_password(32, false),
                     'valid_to' => $expiration_date,
                 ],
-            ] );
-            if ( is_wp_error( $response ) ) {
-                error_log( '[SSM] API key creation failed: ' . $response->get_error_message() );
+            ]);
+            if (is_wp_error($response)) {
+                error_log('[SSM] API key creation failed: ' . $response->get_error_message());
             } else {
-                $data = json_decode( wp_remote_retrieve_body( $response ), true );
-                if ( isset( $data['api_key'] ) ) {
-                    update_user_meta( $user_id, 'ssm_api_key', $data['api_key'] );
-                    update_user_meta( $user_id, 'ssm_api_key_expiry', $expiration_date );
+                $data = json_decode(wp_remote_retrieve_body($response), true);
+                if (isset($data['api_key'])) {
+                    update_user_meta($user_id, 'ssm_api_key', $data['api_key']);
+                    update_user_meta($user_id, 'ssm_api_key_expiry', $expiration_date);
                 }
             }
         } else {
-            // API key exists; update the expiration date.
-            $response = wp_remote_post( home_url( '/wp-json/akm/v1/key/' . $user_id ), [
+            // Update existing
+            $response = wp_remote_post(home_url('/wp-json/akm/v1/key/' . $user_id), [
                 'method' => 'PUT',
                 'body'   => [
-                    'email'    => get_userdata( $user_id )->user_email,
+                    'email'    => get_userdata($user_id)->user_email,
                     'api_key'  => $existing_key,
                     'valid_to' => $expiration_date,
                 ],
-            ] );
-            if ( is_wp_error( $response ) ) {
-                error_log( '[SSM] API key update failed: ' . $response->get_error_message() );
+            ]);
+            if (is_wp_error($response)) {
+                error_log('[SSM] API key update failed: ' . $response->get_error_message());
             } else {
-                update_user_meta( $user_id, 'ssm_api_key_expiry', $expiration_date );
+                update_user_meta($user_id, 'ssm_api_key_expiry', $expiration_date);
             }
         }
     }
-    
-    /**
-     * Mark the API key for a user as expired.
-     */
-    public function expire_api_key( $user_id ) {
-        $existing_key = get_user_meta( $user_id, 'ssm_api_key', true );
-        if ( $existing_key ) {
-            $response = wp_remote_post( home_url( '/wp-json/akm/v1/expire-key/' . $user_id ), [
-                'method' => 'POST',
-            ] );
-            if ( is_wp_error( $response ) ) {
-                error_log( '[SSM] API key expiration failed: ' . $response->get_error_message() );
-            } else {
-                // Optionally remove or update the API key status in user meta.
-                update_user_meta( $user_id, 'ssm_api_key_expiry', current_time( 'mysql' ) );
-            }
-        }
-    }
-    
-    /**
-     * Shortcode to display an "Add to Cart" button for a given product.
-     * Usage: [ssm_add_to_cart product_id="123"]
-     */
-    public function ssm_add_to_cart_shortcode( $atts ) {
-        $atts = shortcode_atts( [
-            'product_id' => 0,
-        ], $atts, 'ssm_add_to_cart' );
 
-        $product_id = intval( $atts['product_id'] );
-        if ( ! $product_id ) {
+    /**
+     * Expire the user's API key
+     */
+    public function expire_api_key($user_id) {
+        $existing_key = get_user_meta($user_id, 'ssm_api_key', true);
+        if ($existing_key) {
+            $response = wp_remote_post(home_url('/wp-json/akm/v1/expire-key/' . $user_id), [
+                'method' => 'POST',
+            ]);
+            if (is_wp_error($response)) {
+                error_log('[SSM] API key expiration failed: ' . $response->get_error_message());
+            } else {
+                update_user_meta($user_id, 'ssm_api_key_expiry', current_time('mysql'));
+            }
+        }
+    }
+
+    /**
+     * [ssm_add_to_cart product_id="123"]
+     */
+    public function ssm_add_to_cart_shortcode($atts) {
+        $atts = shortcode_atts([
+            'product_id' => 0,
+        ], $atts, 'ssm_add_to_cart');
+
+        $product_id = intval($atts['product_id']);
+        if (!$product_id) {
             return 'Invalid product.';
         }
-
-        // Retrieve product details from DB
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
-        $product = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
-
-        if ( ! $product ) {
+        $product = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table_products WHERE id = %d",
+            $product_id
+        ));
+        if (!$product) {
             return 'Product not found.';
         }
 
-        // Output a button with data attributes for JS integration.
         ob_start(); ?>
-        <div class="ssm-product" data-product-id="<?php echo esc_attr( $product->id ); ?>" data-price="<?php echo esc_attr( $product->price ); ?>">
-            <h3><?php echo esc_html( $product->name ); ?></h3>
-            <p><?php echo esc_html( $product->description ); ?></p>
-            <p>Price: $<?php echo number_format( $product->price, 2 ); ?></p>
-            <?php if ( $product->subscription ) : ?>
-                <p>Subscription: $<?php echo number_format( $product->subscription_price, 2 ); ?> per <?php echo esc_html( $product->subscription_interval ); ?></p>
+        <div class="ssm-product" data-product-id="<?php echo esc_attr($product->id); ?>" data-price="<?php echo esc_attr($product->price); ?>">
+            <h3><?php echo esc_html($product->name); ?></h3>
+            <p><?php echo esc_html($product->description); ?></p>
+            <p>Price: $<?php echo number_format($product->price, 2); ?></p>
+            <?php if ($product->subscription) : ?>
+                <p>Subscription: $<?php echo number_format($product->subscription_price, 2); ?> per <?php echo esc_html($product->subscription_interval); ?></p>
             <?php endif; ?>
             <button class="ssm-add-to-cart-btn">Add to Cart</button>
         </div>
         <?php
         return ob_get_clean();
     }
-    public function ajax_update_cart_quantity() {
-        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
-        $quantity   = isset($_POST['quantity']) ? intval($_POST['quantity']) : 1;
-        if ( !$product_id ) {
-            wp_send_json_error('Invalid product.');
-        }
-        $_SESSION['ssm_cart'][$product_id] = $quantity;
-        global $wpdb;
-        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
-        
-        // Calculate subtotal for the updated product.
-        $product = $wpdb->get_row($wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $product_id));
-        $product_subtotal = 0;
-        if ($product) {
-            $product_subtotal = $product->price * $quantity;
-        }
-        
-        // Recalculate overall total price.
-        $total_price = 0;
-        foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
-            $p = $wpdb->get_row($wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $pid));
-            if ($p) {
-                $total_price += $p->price * $qty;
-            }
-        }
-        wp_send_json_success([
-            'total_price'      => $total_price,
-            'product_subtotal' => $product_subtotal,
-        ]);
-    }
-    
+
     /**
-     * Shortcode to show the checkout page.
-     * Usage: [ssm_checkout]
+     * [ssm_checkout]
      */
     public function ssm_checkout_shortcode() {
-        if ( empty( $_SESSION['ssm_cart'] ) ) {
+        if (empty($_SESSION['ssm_cart'])) {
             return '<p>Your cart is empty.</p>';
         }
-        
+
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
         $cart_items = $_SESSION['ssm_cart'];
         $total_price = 0;
         
-        ob_start();
-        ?>
+        ob_start(); ?>
         <div class="ssm-checkout">
             <h2>Your Cart</h2>
             <table class="ssm-cart-table" style="width:100%; border-collapse: collapse;">
@@ -453,63 +453,56 @@ class SSM_Plugin {
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ( $cart_items as $product_id => $quantity ) : 
-                        $product = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
-                        if ( ! $product ) {
-                            continue;
-                        }
-                        $subtotal = $product->price * $quantity;
-                        $total_price += $subtotal;
-                    ?>
-                        <tr data-product-id="<?php echo esc_attr( $product->id ); ?>">
-                            <td style="padding:8px;"><?php echo esc_html( $product->name ); ?></td>
-                            <td style="padding:8px; text-align:center;">
-                                <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr( $product->id ); ?>">-</button>
-                                <input type="text" value="<?php echo intval( $quantity ); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr( $product->id ); ?>" style="width:40px; text-align:center;" />
-                                <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr( $product->id ); ?>">+</button>
-                            </td>
-                            <td style="padding:8px; text-align:right;">$<?php echo number_format( $product->price, 2 ); ?></td>
-                            <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format( $subtotal, 2 ); ?></td>
-                        </tr>
-                    <?php endforeach; ?>
+                <?php foreach ($cart_items as $product_id => $quantity) :
+                    $product = $wpdb->get_row($wpdb->prepare(
+                        "SELECT * FROM $table_products WHERE id = %d",
+                        $product_id
+                    ));
+                    if (!$product) {
+                        continue;
+                    }
+                    $subtotal = $product->price * $quantity;
+                    $total_price += $subtotal; ?>
+                    <tr data-product-id="<?php echo esc_attr($product->id); ?>">
+                        <td style="padding:8px;"><?php echo esc_html($product->name); ?></td>
+                        <td style="padding:8px; text-align:center;">
+                            <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr($product->id); ?>">-</button>
+                            <input type="text" value="<?php echo intval($quantity); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr($product->id); ?>" style="width:40px; text-align:center;" />
+                            <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr($product->id); ?>">+</button>
+                        </td>
+                        <td style="padding:8px; text-align:right;">$<?php echo number_format($product->price, 2); ?></td>
+                        <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format($subtotal, 2); ?></td>
+                    </tr>
+                <?php endforeach; ?>
                 </tbody>
             </table>
-            <p class="ssm-total" style="font-weight:bold; padding:8px;">Total: $<?php echo number_format( $total_price, 2 ); ?></p>
+            <p class="ssm-total" style="font-weight:bold; padding:8px;">Total: $<?php echo number_format($total_price, 2); ?></p>
             <button id="ssm-proceed-checkout" class="button button-primary">Proceed to Checkout</button>
         </div>
         <script>
-            document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
-                window.location.href = "<?php echo esc_url( site_url( '/checkout-page/' ) ); ?>";
-            });
+        document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
+            window.location.href = "<?php echo esc_url(site_url('/checkout-page/')); ?>";
+        });
         </script>
         <?php
         return ob_get_clean();
     }
 
-
-
-
-    
     /**
-     * Shortcode to show customer's subscription account page.
-     * This page allows customers to upgrade/downgrade their subscription.
+     * [ssm_subscription_account]
      */
     public function ssm_subscription_account_shortcode() {
-        // For simplicity, this output is a placeholder.
-        ob_start();
-        ?>
+        ob_start(); ?>
         <div class="ssm-subscription-account">
             <h2>Your Subscription</h2>
             <?php
-            // Retrieve current subscription info for the logged-in user.
             $user_id = get_current_user_id();
-            $api_key = get_user_meta( $user_id, 'ssm_api_key', true );
-            $expiry  = get_user_meta( $user_id, 'ssm_api_key_expiry', true );
+            $api_key = get_user_meta($user_id, 'ssm_api_key', true);
+            $expiry  = get_user_meta($user_id, 'ssm_api_key_expiry', true);
             ?>
-            <p>Your API Key: <?php echo esc_html( $api_key ); ?></p>
-            <p>Expires on: <?php echo esc_html( $expiry ); ?></p>
+            <p>Your API Key: <?php echo esc_html($api_key); ?></p>
+            <p>Expires on: <?php echo esc_html($expiry); ?></p>
             <form method="post" action="">
-                <!-- Provide options to change subscription plan -->
                 <select name="new_subscription_plan">
                     <option value="monthly">Monthly</option>
                     <option value="yearly">Yearly</option>
@@ -520,17 +513,17 @@ class SSM_Plugin {
         <?php
         return ob_get_clean();
     }
-    
+
     /**
-     * Register all admin menus and submenus.
+     * Register admin menus
      */
     public function register_admin_menus() {
-        add_menu_page( 'SSM Manager', 'SSM Manager', 'manage_options', 'ssm_manager', [ $this, 'render_products_page' ], 'dashicons-cart', 58 );
-        add_submenu_page( 'ssm_manager', 'Products', 'Products', 'manage_options', 'ssm_products', [ $this, 'render_products_page' ] );
-        add_submenu_page( 'ssm_manager', 'Categories', 'Categories', 'manage_options', 'ssm_categories', [ $this, 'render_categories_page' ] );
-        add_submenu_page( 'ssm_manager', 'API Key Management', 'API Keys', 'manage_options', 'ssm_api_keys', [ $this, 'render_api_keys_page' ] );
-        add_submenu_page( 'ssm_manager', 'Error Logs', 'Error Logs', 'manage_options', 'ssm_error_logs', [ $this, 'render_error_logs_page' ] );
-        add_submenu_page( 'ssm_manager', 'Instructions', 'Instructions', 'manage_options', 'ssm_instructions', [ $this, 'render_instructions_page' ] );
+        add_menu_page('SSM Manager', 'SSM Manager', 'manage_options', 'ssm_manager', [$this, 'render_products_page'], 'dashicons-cart', 58);
+        add_submenu_page('ssm_manager', 'Products', 'Products', 'manage_options', 'ssm_products', [$this, 'render_products_page']);
+        add_submenu_page('ssm_manager', 'Categories', 'Categories', 'manage_options', 'ssm_categories', [$this, 'render_categories_page']);
+        add_submenu_page('ssm_manager', 'API Key Management', 'API Keys', 'manage_options', 'ssm_api_keys', [$this, 'render_api_keys_page']);
+        add_submenu_page('ssm_manager', 'Error Logs', 'Error Logs', 'manage_options', 'ssm_error_logs', [$this, 'render_error_logs_page']);
+        add_submenu_page('ssm_manager', 'Instructions', 'Instructions', 'manage_options', 'ssm_instructions', [$this, 'render_instructions_page']);
     }
     
     /**
@@ -1004,41 +997,42 @@ if ( file_exists( $log_file ) ) {
     }
     
     /**
-     * Daily cron task: Send renewal reminder emails.
+     * Daily cron for renewal reminders
      */
     public function send_renewal_reminders() {
-        // Loop through all users with an API key and check the expiry date.
-        $users = get_users( [
-            'meta_key' => 'ssm_api_key_expiry',
+        $users = get_users([
+            'meta_key'     => 'ssm_api_key_expiry',
             'meta_compare' => 'EXISTS'
-        ] );
-        foreach ( $users as $user ) {
-            $expiry = get_user_meta( $user->ID, 'ssm_api_key_expiry', true );
-            if ( $expiry ) {
-                $expiry_time = strtotime( $expiry );
+        ]);
+        foreach ($users as $user) {
+            $expiry = get_user_meta($user->ID, 'ssm_api_key_expiry', true);
+            if ($expiry) {
+                $expiry_time = strtotime($expiry);
                 $now = time();
                 $diff = $expiry_time - $now;
-                $days_left = floor( $diff / (60 * 60 * 24) );
-                if ( in_array( $days_left, [7, 3, 0] ) ) {
+                $days_left = floor($diff / (60 * 60 * 24));
+                if (in_array($days_left, [7, 3, 0])) {
                     $subject = 'Your subscription is renewing soon';
-                    $message = "Hello " . $user->display_name . ",\n\nYour subscription is set to renew in {$days_left} day(s). Please review your plan details in your account.\n\nThanks,\nSubscription Service Manager Team";
-                    wp_mail( $user->user_email, $subject, $message );
+                    $message = "Hello {$user->display_name},\n\nYour subscription is set to renew in {$days_left} day(s). Please review your plan details in your account.\n\nThanks,\nSubscription Service Manager Team";
+                    wp_mail($user->user_email, $subject, $message);
                 }
             }
         }
     }
 }
-add_action( 'wp_enqueue_scripts', function() {
-    if ( ! function_exists( 'get_plugin_data' ) ) {
+
+// Enqueue front-end script with plugin version
+add_action('wp_enqueue_scripts', function() {
+    if (!function_exists('get_plugin_data')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
-    $plugin_data = get_plugin_data( __FILE__ );
-    $version = isset( $plugin_data['Version'] ) ? $plugin_data['Version'] : '1.0';
-    wp_enqueue_script( 'ssm-front', plugins_url( 'assets/js/ssm-front.js', __FILE__ ), [], $version, true );
-    wp_localize_script( 'ssm-front', 'ssm_params', [
-        'ajax_url' => admin_url( 'admin-ajax.php' ),
-    ] );
-} );
+    $plugin_data = get_plugin_data(__FILE__);
+    $version = isset($plugin_data['Version']) ? $plugin_data['Version'] : '1.0';
+    wp_enqueue_script('ssm-front', plugins_url('assets/js/ssm-front.js', __FILE__), [], $version, true);
+    wp_localize_script('ssm-front', 'ssm_params', [
+        'ajax_url' => admin_url('admin-ajax.php'),
+    ]);
+});
 
-
+// Initialize the main plugin
 new SSM_Plugin();

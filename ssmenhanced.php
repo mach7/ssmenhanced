@@ -2,13 +2,114 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, and instructions.
-Version: 1.0
-Author: Your Name
+Version: 1.5
+Author: Tyson Brooks
+Author URI: https://frostlineworks.com
+Tested up to: 6.3
 */
 
-if ( ! defined( 'ABSPATH' ) ) {
+// Prevent direct access to this file
+if (!defined('ABSPATH')) {
     exit;
 }
+
+// Ensure the FLW Plugin Library is loaded before running the plugin
+add_action('plugins_loaded', function () {
+
+    // Check if the FLW Plugin Library is active
+    if (class_exists('FLW_Plugin_Update_Checker')) {
+        $pluginSlug = basename(dirname(__FILE__)); // Dynamically get the plugin slug
+
+        // Initialize the update checker
+        FLW_Plugin_Update_Checker::initialize(__FILE__, $pluginSlug);
+
+        // Replace the update icon
+        add_filter('site_transient_update_plugins', function ($transient) {
+            if (isset($transient->response)) {
+                foreach ($transient->response as $plugin_slug => $plugin_data) {
+                    // Use the plugin's main file path to determine its asset URL
+                    if ($plugin_slug === plugin_basename(__FILE__)) {
+                        $icon_url = plugins_url('assets/logo-128x128.png', __FILE__);
+                        $transient->response[$plugin_slug]->icons = [
+                            'default' => $icon_url,
+                            '1x' => $icon_url,
+                            '2x' => plugins_url('assets/logo-256x256.png', __FILE__),
+                        ];
+                    }
+                }
+            }
+            return $transient;
+        });
+    } else {
+        // Admin notice for missing library
+        add_action('admin_notices', function () {
+            $pluginSlug = 'flwpluginlibrary/flwpluginlibrary.php';
+            $plugins = get_plugins();
+
+            if (!isset($plugins[$pluginSlug])) {
+                echo '<div class="notice notice-error"><p>The FLW Plugin Library is not installed. Please install and activate it to enable update functionality.</p></div>';
+            } elseif (!is_plugin_active($pluginSlug)) {
+                $activateUrl = wp_nonce_url(
+                    admin_url('plugins.php?action=activate&plugin=' . $pluginSlug),
+                    'activate-plugin_' . $pluginSlug
+                );
+                echo '<div class="notice notice-error"><p>The FLW Plugin Library is installed but not active. Please <a href="' . esc_url($activateUrl) . '">activate</a> it to enable update functionality.</p></div>';
+            }
+        });
+    }
+
+    // Check if the FLW Plugin Library is available
+    if ( class_exists('FLW_Plugin_Library') && !( defined('FLW_PLUGIN_LIBRARY_DISABLED') && FLW_PLUGIN_LIBRARY_DISABLED ) ) {
+        class SSM_Plugin_Settings {
+            /**
+             * Constructor to initialize the plugin.
+             */
+            public function __construct() {
+                add_action('admin_menu', [$this, 'register_submenu']);
+            }
+
+            /**
+             * Register the submenu under the FLW Plugins menu.
+             */
+            public function register_submenu() {
+                FLW_Plugin_Library::add_submenu(
+                    'SSM Manager Settings', // Title
+                    'ssm-manager', // Slug
+                    [$this, 'render_settings_page'] // Callback function
+                );
+            }
+
+            /**
+             * Render the settings page content.
+             */
+            public function render_settings_page() {
+                echo '<div class="wrap">';
+                echo '<h1>SSM Manager Settings</h1>';
+                echo '<form method="post" action="options.php">';
+                // Settings fields and save button would go here
+                echo '<p>Here you can manage settings for Subscription Service Manager Enhanced.</p>';
+                echo '</form>';
+                echo '</div>';
+            }
+        }
+        // Initialize the settings page integration
+        new SSM_Plugin_Settings();
+    } else {
+        // Show an admin notice if the FLW Plugin Library is not active
+        add_action('admin_notices', function () {
+            echo '<div class="notice notice-error"><p>The FLW Plugin Library must be activated for Subscription Service Manager Enhanced to work.</p></div>';
+        });
+    }
+});
+
+// Block front-end content if the FLW Plugin Library is disabled.
+if ( defined('FLW_PLUGIN_LIBRARY_DISABLED') && FLW_PLUGIN_LIBRARY_DISABLED ) {
+    return '<p style="color:red;">My Google Reviews is disabled because the FLW Plugin Library API key is invalid or expired. Please update the API key in Global Settings.</p>';
+}
+
+/*-----------------------------
+    SSM Plugin Main Code
+-----------------------------*/
 
 class SSM_Plugin {
 
@@ -41,7 +142,6 @@ class SSM_Plugin {
         add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
     }
     
-
     /**
      * Plugin activation: create necessary tables.
      */
@@ -83,6 +183,7 @@ class SSM_Plugin {
         ) $charset_collate;";
         dbDelta( $sql3 );
     }
+    
     /**
      * AJAX handler for adding a product to the cart.
      */
@@ -116,7 +217,7 @@ class SSM_Plugin {
         // Send a JSON response with the cart total.
         wp_send_json_success( [ 'cart_total' => $cart_total ] );
     }
-
+    
     /**
      * Check if this is a Stripe webhook call.
      */
@@ -125,7 +226,7 @@ class SSM_Plugin {
             $this->handle_stripe_webhook();
         }
     }
-
+    
     /**
      * Handle incoming Stripe webhook events.
      */
@@ -170,7 +271,7 @@ class SSM_Plugin {
         http_response_code(200);
         exit();
     }
-
+    
     /**
      * Process a successful subscription event.
      * Create a new API key or update the expiration date.
@@ -231,7 +332,7 @@ class SSM_Plugin {
             }
         }
     }
-
+    
     /**
      * Mark the API key for a user as expired.
      */
@@ -249,7 +350,7 @@ class SSM_Plugin {
             }
         }
     }
-
+    
     /**
      * Shortcode to display an "Add to Cart" button for a given product.
      * Usage: [ssm_add_to_cart product_id="123"]
@@ -287,7 +388,7 @@ class SSM_Plugin {
         <?php
         return ob_get_clean();
     }
-
+    
     /**
      * Shortcode to show customer's subscription account page.
      * This page allows customers to upgrade/downgrade their subscription.
@@ -318,7 +419,7 @@ class SSM_Plugin {
         <?php
         return ob_get_clean();
     }
-
+    
     /**
      * Register all admin menus and submenus.
      */
@@ -330,7 +431,7 @@ class SSM_Plugin {
         add_submenu_page( 'ssm_manager', 'Error Logs', 'Error Logs', 'manage_options', 'ssm_error_logs', [ $this, 'render_error_logs_page' ] );
         add_submenu_page( 'ssm_manager', 'Instructions', 'Instructions', 'manage_options', 'ssm_instructions', [ $this, 'render_instructions_page' ] );
     }
-
+    
     /**
      * Render the products admin page (list, add, edit, delete).
      */
@@ -574,12 +675,9 @@ class SSM_Plugin {
             });
         });
         </script>
-
         <?php
     }
-
-
-
+    
     /**
      * Render the Categories admin page.
      */
@@ -682,10 +780,7 @@ class SSM_Plugin {
         </div>
         <?php
     }
-
-
-
-
+    
     /**
      * Render the API Key Management admin page.
      * Lists all users with an API key and offers manual controls.
@@ -734,7 +829,7 @@ class SSM_Plugin {
         </div>
         <?php
     }
-
+    
     /**
      * Render the Error Logs admin page.
      * Reads the WP debug log (if exists), allows filtering by error type, and offers a clear logs option.
@@ -783,7 +878,7 @@ if ( file_exists( $log_file ) ) {
         </div>
         <?php
     }
-
+    
     /**
      * Render the Instructions page.
      */
@@ -804,7 +899,7 @@ if ( file_exists( $log_file ) ) {
         </div>
         <?php
     }
-
+    
     /**
      * Daily cron task: Send renewal reminder emails.
      */
@@ -836,6 +931,5 @@ add_action( 'wp_enqueue_scripts', function() {
         'ajax_url' => admin_url( 'admin-ajax.php' ),
     ] );
 } );
-
 
 new SSM_Plugin();

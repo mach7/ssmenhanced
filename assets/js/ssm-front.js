@@ -70,13 +70,18 @@ document.addEventListener('DOMContentLoaded', function () {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
+                // Update the input field value.
                 qtyElement.value = newQuantity;
-                // Optionally update total price if returned by the server
-                if (typeof data.total_price !== 'undefined') {
-                    const totalDisplay = document.querySelector('.ssm-total');
-                    if (totalDisplay) {
-                        totalDisplay.textContent = 'Total: $' + parseFloat(data.total_price).toFixed(2);
-                    }
+                // Update the product subtotal in the current row.
+                const row = qtyElement.closest('tr');
+                const subtotalCell = row.querySelector('.ssm-subtotal');
+                if (subtotalCell && data.product_subtotal !== undefined) {
+                    subtotalCell.textContent = '$' + parseFloat(data.product_subtotal).toFixed(2);
+                }
+                // Update overall total display.
+                const totalDisplay = document.querySelector('.ssm-total');
+                if (totalDisplay && data.total_price !== undefined) {
+                    totalDisplay.textContent = 'Total: $' + parseFloat(data.total_price).toFixed(2);
                 }
             } else {
                 const errorMsg = data.data || 'Failed to update quantity.';

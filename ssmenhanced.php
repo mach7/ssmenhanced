@@ -2,7 +2,7 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
-Version: 1.5.1
+Version: 1.5.2
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
@@ -431,7 +431,6 @@ class SSM_Plugin {
      * Usage: [ssm_checkout]
      */
     public function ssm_checkout_shortcode() {
-        // Session is already started on init.
         if ( empty( $_SESSION['ssm_cart'] ) ) {
             return '<p>Your cart is empty.</p>';
         }
@@ -483,14 +482,14 @@ class SSM_Plugin {
             <button id="ssm-proceed-checkout" class="button button-primary">Proceed to Checkout</button>
         </div>
         <script>
-        // Redirect the user when proceeding to checkout
-        document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
-            window.location.href = "<?php echo esc_url( site_url( '/checkout-page/' ) ); ?>";
-        });
+            document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
+                window.location.href = "<?php echo esc_url( site_url( '/checkout-page/' ) ); ?>";
+            });
         </script>
         <?php
         return ob_get_clean();
     }
+
 
 
     

@@ -70,15 +70,12 @@ document.addEventListener('DOMContentLoaded', function () {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                // Update the input field value.
                 qtyElement.value = newQuantity;
-                // Update the product subtotal in the current row.
                 const row = qtyElement.closest('tr');
                 const subtotalCell = row.querySelector('.ssm-subtotal');
                 if (subtotalCell && data.product_subtotal !== undefined) {
                     subtotalCell.textContent = '$' + parseFloat(data.product_subtotal).toFixed(2);
                 }
-                // Update overall total display.
                 const totalDisplay = document.querySelector('.ssm-total');
                 if (totalDisplay && data.total_price !== undefined) {
                     totalDisplay.textContent = 'Total: $' + parseFloat(data.total_price).toFixed(2);
@@ -95,7 +92,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Event listeners for plus buttons
+    // Plus buttons
     const plusButtons = document.querySelectorAll('.ssm-qty-plus');
     plusButtons.forEach(function(button) {
         button.addEventListener('click', function() {
@@ -108,7 +105,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // Event listeners for minus buttons
+    // Minus buttons
     const minusButtons = document.querySelectorAll('.ssm-qty-minus');
     minusButtons.forEach(function(button) {
         button.addEventListener('click', function() {
@@ -123,7 +120,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // Listen for manual changes to the quantity input field
+    // Manual changes to quantity input
     const qtyInputs = document.querySelectorAll('.ssm-qty-input');
     qtyInputs.forEach(function(input) {
         input.addEventListener('change', function() {

@@ -489,17 +489,24 @@ class SSM_Plugin {
                         <th>Name</th>
                         <th>Price</th>
                         <th>Subscription</th>
+                        <th>Shortcode</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ( $products ) : ?>
-                        <?php foreach ( $products as $p ) : ?>
+                        <?php foreach ( $products as $p ) : 
+                            $shortcode = '[ssm_add_to_cart product_id="' . $p->id . '"]';
+                        ?>
                             <tr>
                                 <td><?php echo esc_html( $p->id ); ?></td>
                                 <td><?php echo esc_html( $p->name ); ?></td>
                                 <td>$<?php echo number_format( $p->price, 2 ); ?></td>
                                 <td><?php echo $p->subscription ? 'Yes' : 'No'; ?></td>
+                                <td>
+                                    <input type="text" class="ssm-shortcode-field" value="<?php echo esc_attr( $shortcode ); ?>" readonly style="width:100%; margin-bottom:4px;">
+                                    <button type="button" class="button ssm-copy-btn" data-shortcode="<?php echo esc_attr( $shortcode ); ?>">Copy</button>
+                                </td>
                                 <td>
                                     <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=edit&id=' . $p->id ); ?>">Edit</a> | 
                                     <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=delete&id=' . $p->id ); ?>" onclick="return confirm('Are you sure?');">Delete</a>
@@ -507,12 +514,29 @@ class SSM_Plugin {
                             </tr>
                         <?php endforeach; ?>
                     <?php else : ?>
-                        <tr><td colspan="5">No products found.</td></tr>
+                        <tr><td colspan="6">No products found.</td></tr>
                     <?php endif; ?>
                 </tbody>
             </table>
             <p><a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=add' ); ?>" class="button button-primary">Add New Product</a></p>
         </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var copyButtons = document.querySelectorAll('.ssm-copy-btn');
+            copyButtons.forEach(function(btn) {
+                btn.addEventListener('click', function(e) {
+                    var shortcode = e.target.getAttribute('data-shortcode');
+                    navigator.clipboard.writeText(shortcode).then(function() {
+                        e.target.innerText = 'Copied!';
+                        setTimeout(function() {
+                            e.target.innerText = 'Copy';
+                        }, 2000);
+                    });
+                });
+            });
+        });
+        </script>
+
         <?php
     }
 

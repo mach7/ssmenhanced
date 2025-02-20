@@ -792,5 +792,11 @@ if ( file_exists( $log_file ) ) {
         }
     }
 }
+add_action( 'wp_enqueue_scripts', function() {
+    wp_enqueue_script( 'ssm-front', plugins_url( 'assets/js/ssm-front.js', __FILE__ ), [], '1.0', true );
+    wp_localize_script( 'ssm-front', 'ssm_params', [
+        'ajax_url' => admin_url( 'admin-ajax.php' ),
+    ] );
+} );
 
 new SSM_Plugin();

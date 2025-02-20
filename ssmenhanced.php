@@ -2,7 +2,7 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
-Version: 1.5.2
+Version: 1.5.3
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
@@ -425,7 +425,6 @@ class SSM_Plugin {
         ]);
     }
     
-    
     /**
      * Shortcode to show the checkout page.
      * Usage: [ssm_checkout]
@@ -454,15 +453,14 @@ class SSM_Plugin {
                     </tr>
                 </thead>
                 <tbody>
-                    <?php
-                    foreach ( $cart_items as $product_id => $quantity ) {
+                    <?php foreach ( $cart_items as $product_id => $quantity ) : 
                         $product = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
                         if ( ! $product ) {
                             continue;
                         }
                         $subtotal = $product->price * $quantity;
                         $total_price += $subtotal;
-                        ?>
+                    ?>
                         <tr data-product-id="<?php echo esc_attr( $product->id ); ?>">
                             <td style="padding:8px;"><?php echo esc_html( $product->name ); ?></td>
                             <td style="padding:8px; text-align:center;">
@@ -473,9 +471,7 @@ class SSM_Plugin {
                             <td style="padding:8px; text-align:right;">$<?php echo number_format( $product->price, 2 ); ?></td>
                             <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format( $subtotal, 2 ); ?></td>
                         </tr>
-                        <?php
-                    }
-                    ?>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
             <p class="ssm-total" style="font-weight:bold; padding:8px;">Total: $<?php echo number_format( $total_price, 2 ); ?></p>
@@ -489,6 +485,7 @@ class SSM_Plugin {
         <?php
         return ob_get_clean();
     }
+
 
 
 

@@ -1,7 +1,7 @@
 <?php
 /*
 Plugin Name: Subscription Service Manager Enhanced
-Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, and instructions.
+Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
 Version: 1.5
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
@@ -12,6 +12,13 @@ Tested up to: 6.3
 if (!defined('ABSPATH')) {
     exit;
 }
+
+// Start PHP session early on init to avoid header errors
+add_action('init', function() {
+    if (!session_id()) {
+        session_start();
+    }
+}, 1);
 
 // Ensure the FLW Plugin Library is loaded before running the plugin
 add_action('plugins_loaded', function () {
@@ -195,12 +202,7 @@ class SSM_Plugin {
             wp_send_json_error( 'Invalid product.' );
         }
 
-        // Start session if not already started.
-        if ( ! session_id() ) {
-            session_start();
-        }
-
-        // Initialize the cart session variable if it doesn't exist.
+        // (Session is already started on init.)
         if ( ! isset( $_SESSION['ssm_cart'] ) ) {
             $_SESSION['ssm_cart'] = [];
         }
@@ -395,10 +397,7 @@ class SSM_Plugin {
      * Usage: [ssm_checkout]
      */
     public function ssm_checkout_shortcode() {
-        // Start session if not already started.
-        if ( ! session_id() ) {
-            session_start();
-        }
+        // Session is already started on init.
     
         // Check if the cart exists and is not empty.
         if ( empty( $_SESSION['ssm_cart'] ) ) {

@@ -2,7 +2,7 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
-Version: 1.5
+Version: 1.5.1
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
@@ -1033,10 +1033,16 @@ if ( file_exists( $log_file ) ) {
     }
 }
 add_action( 'wp_enqueue_scripts', function() {
-    wp_enqueue_script( 'ssm-front', plugins_url( 'assets/js/ssm-front.js', __FILE__ ), [], '1.0', true );
+    if ( ! function_exists( 'get_plugin_data' ) ) {
+        require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    }
+    $plugin_data = get_plugin_data( __FILE__ );
+    $version = isset( $plugin_data['Version'] ) ? $plugin_data['Version'] : '1.0';
+    wp_enqueue_script( 'ssm-front', plugins_url( 'assets/js/ssm-front.js', __FILE__ ), [], $version, true );
     wp_localize_script( 'ssm-front', 'ssm_params', [
         'ajax_url' => admin_url( 'admin-ajax.php' ),
     ] );
 } );
+
 
 new SSM_Plugin();

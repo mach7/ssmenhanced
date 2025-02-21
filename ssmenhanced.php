@@ -13,80 +13,98 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-// Start PHP session early on init to avoid header errors
-add_action( 'init', function() {
+// Define a global variable for the current plugin file
+global $ssm_plugin_file;
+$ssm_plugin_file = __FILE__;
+
+/*===================================
+=         Session Handling          =
+===================================*/
+function ssm_start_session() {
 	if ( ! session_id() ) {
 		session_start();
 	}
-}, 1 );
+}
+add_action( 'init', 'ssm_start_session', 1 );
 
-// Ensure the FLW Plugin Library is loaded before running the plugin
-add_action( 'plugins_loaded', function() {
+/*=============================================
+=      Plugin Loaded and Update Checker      =
+=============================================*/
+function ssm_update_plugins_filter( $transient ) {
+	global $ssm_plugin_file;
+	if ( isset( $transient->response ) ) {
+		foreach ( $transient->response as $plugin_slug => $plugin_data ) {
+			if ( $plugin_slug === plugin_basename( $ssm_plugin_file ) ) {
+				$icon_url = plugins_url( 'assets/logo-128x128.png', $ssm_plugin_file );
+				$transient->response[ $plugin_slug ]->icons = array(
+					'default' => $icon_url,
+					'1x'      => $icon_url,
+					'2x'      => plugins_url( 'assets/logo-256x256.png', $ssm_plugin_file ),
+				);
+			}
+		}
+	}
+	return $transient;
+}
 
-	// If the library exists, initialize update checker and settings
+function ssm_admin_notice_no_flw_library() {
+	$pluginSlug = 'flwpluginlibrary/flwpluginlibrary.php';
+	$plugins    = get_plugins();
+	if ( ! isset( $plugins[ $pluginSlug ] ) ) {
+		echo '<div class="notice notice-error"><p>The FLW Plugin Library is not installed. Please install and activate it to enable update functionality.</p></div>';
+	} elseif ( ! is_plugin_active( $pluginSlug ) ) {
+		$activateUrl = wp_nonce_url(
+			admin_url( 'plugins.php?action=activate&plugin=' . $pluginSlug ),
+			'activate-plugin_' . $pluginSlug
+		);
+		echo '<div class="notice notice-error"><p>The FLW Plugin Library is installed but not active. Please <a href="' . esc_url( $activateUrl ) . '">activate</a> it to enable update functionality.</p></div>';
+	}
+}
+
+function ssm_admin_notice_flw_library_required() {
+	echo '<div class="notice notice-error"><p>The FLW Plugin Library must be activated for Subscription Service Manager Enhanced to work.</p></div>';
+}
+
+function ssm_plugins_loaded() {
+	// If the FLW Plugin Update Checker exists, initialize it and add our update filter.
 	if ( class_exists( 'FLW_Plugin_Update_Checker' ) ) {
 		$pluginSlug = basename( dirname( __FILE__ ) );
 		FLW_Plugin_Update_Checker::initialize( __FILE__, $pluginSlug );
-		add_filter( 'site_transient_update_plugins', function( $transient ) use ( __FILE__ ) {
-			if ( isset( $transient->response ) ) {
-				foreach ( $transient->response as $plugin_slug => $plugin_data ) {
-					if ( $plugin_slug === plugin_basename( __FILE__ ) ) {
-						$icon_url = plugins_url( 'assets/logo-128x128.png', __FILE__ );
-						$transient->response[ $plugin_slug ]->icons = array(
-							'default' => $icon_url,
-							'1x'      => $icon_url,
-							'2x'      => plugins_url( 'assets/logo-256x256.png', __FILE__ ),
-						);
-					}
-				}
-			}
-			return $transient;
-		} );
+		add_filter( 'site_transient_update_plugins', 'ssm_update_plugins_filter' );
 	} else {
 		// Only show admin notices on non-AJAX requests.
 		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-			add_action( 'admin_notices', function() {
-				$pluginSlug = 'flwpluginlibrary/flwpluginlibrary.php';
-				$plugins    = get_plugins();
-				if ( ! isset( $plugins[ $pluginSlug ] ) ) {
-					echo '<div class="notice notice-error"><p>The FLW Plugin Library is not installed. Please install and activate it to enable update functionality.</p></div>';
-				} elseif ( ! is_plugin_active( $pluginSlug ) ) {
-					$activateUrl = wp_nonce_url(
-						admin_url( 'plugins.php?action=activate&plugin=' . $pluginSlug ),
-						'activate-plugin_' . $pluginSlug
-					);
-					echo '<div class="notice notice-error"><p>The FLW Plugin Library is installed but not active. Please <a href="' . esc_url( $activateUrl ) . '">activate</a> it to enable update functionality.</p></div>';
-				}
-			} );
+			add_action( 'admin_notices', 'ssm_admin_notice_no_flw_library' );
 		}
 	}
 
 	if ( class_exists( 'FLW_Plugin_Library' ) && !( defined( 'FLW_PLUGIN_LIBRARY_DISABLED' ) && FLW_PLUGIN_LIBRARY_DISABLED ) ) {
-		class SSM_Plugin_Settings {
-			public function __construct() {
-				add_action( 'admin_menu', array( $this, 'register_submenu' ) );
-			}
-			public function register_submenu() {
-				FLW_Plugin_Library::add_submenu(
-					'SSM Manager Settings',
-					'ssm-manager',
-					array( $this, 'render_settings_page' )
-				);
-			}
-			public function render_settings_page() {
-				echo '<div class="wrap"><h1>SSM Manager Settings</h1>';
-				echo '<form method="post" action="options.php">';
-				echo '<p>Here you can manage settings for Subscription Service Manager Enhanced.</p>';
-				echo '</form></div>';
-			}
-		}
-		new SSM_Plugin_Settings();
-	} else {
-		// Only show admin notices on non-AJAX requests.
 		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-			add_action( 'admin_notices', function() {
-				echo '<div class="notice notice-error"><p>The FLW Plugin Library must be activated for Subscription Service Manager Enhanced to work.</p></div>';
-			} );
+			// Initialize plugin settings submenu via FLW_Plugin_Library.
+			// We define a class for settings.
+			class SSM_Plugin_Settings {
+				public function __construct() {
+					add_action( 'admin_menu', array( $this, 'register_submenu' ) );
+				}
+				public function register_submenu() {
+					FLW_Plugin_Library::add_submenu(
+						'SSM Manager Settings',
+						'ssm-manager',
+						array( $this, 'render_settings_page' )
+					);
+				}
+				public function render_settings_page() {
+					echo '<div class="wrap"><h1>SSM Manager Settings</h1>';
+					echo '<form method="post" action="options.php">';
+					echo '<p>Here you can manage settings for Subscription Service Manager Enhanced.</p>';
+					echo '</form></div>';
+				}
+			}
+			new SSM_Plugin_Settings();
+		}
+	} else {
+		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
+			add_action( 'admin_notices', 'ssm_admin_notice_flw_library_required' );
 		}
 	}
 
@@ -97,26 +115,24 @@ add_action( 'plugins_loaded', function() {
 			return;
 		}
 	}
+}
+add_action( 'plugins_loaded', 'ssm_plugins_loaded' );
 
-} );
-
-/*-----------------------------
-    SSM Plugin Main Code
------------------------------*/
-
+/*===================================
+=         Main Plugin Class         =
+===================================*/
 class SSM_Plugin {
 
 	const PRODUCT_TABLE         = 'ssm_products';
 	const CATEGORY_TABLE        = 'ssm_product_categories';
 	const PRODUCT_CAT_REL_TABLE = 'ssm_product_category';
 
-	// Modify table creation to include subscription_user_role.
 	public function activate() {
 		global $wpdb;
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		$charset_collate = $wpdb->get_charset_collate();
 
-		// Products table with new subscription_user_role column.
+		// Products table with subscription_user_role column.
 		$table_products = $wpdb->prefix . self::PRODUCT_TABLE;
 		$sql1 = "CREATE TABLE $table_products (
 			id mediumint(9) NOT NULL AUTO_INCREMENT,
@@ -416,7 +432,8 @@ class SSM_Plugin {
 		if ( ! $product ) {
 			return 'Product not found.';
 		}
-		ob_start(); ?>
+		ob_start();
+		?>
         <div class="ssm-product" data-product-id="<?php echo esc_attr( $product->id ); ?>" data-price="<?php echo esc_attr( $product->price ); ?>">
             <h3><?php echo esc_html( $product->name ); ?></h3>
             <p><?php echo esc_html( $product->description ); ?></p>
@@ -542,7 +559,7 @@ class SSM_Plugin {
 		add_submenu_page( 'ssm_manager', 'Instructions', 'Instructions', 'manage_options', 'ssm_instructions', array( $this, 'render_instructions_page' ) );
 	}
 
-	// ------------------ Product Admin Pages ------------------
+	//------------------ Product Admin Pages ------------------
 
 	public function render_products_page() {
 		global $wpdb;
@@ -571,7 +588,6 @@ class SSM_Plugin {
 			$subscription          = isset( $_POST['subscription'] ) ? 1 : 0;
 			$subscription_interval = sanitize_text_field( $_POST['subscription_interval'] );
 			$subscription_price    = floatval( $_POST['subscription_price'] );
-			// New field for subscription user role.
 			$subscription_user_role = isset( $_POST['subscription_user_role'] ) ? sanitize_text_field( $_POST['subscription_user_role'] ) : '';
 			$categories             = isset( $_POST['categories'] ) ? (array) $_POST['categories'] : array();
 
@@ -631,8 +647,8 @@ class SSM_Plugin {
 		}
 
 		if ( $action === 'add' || $action === 'edit' ) {
-			$product          = null;
-			$product_id       = 0;
+			$product    = null;
+			$product_id = 0;
 			if ( $action === 'edit' && isset( $_GET['id'] ) ) {
 				$product_id = intval( $_GET['id'] );
 				$product    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
@@ -760,20 +776,22 @@ class SSM_Plugin {
             </table>
             <p><a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=add' ); ?>" class="button button-primary">Add New Product</a></p>
         </div>
-        <script>
+        <script type="text/javascript">
         document.addEventListener('DOMContentLoaded', function () {
             var copyButtons = document.querySelectorAll('.ssm-copy-btn');
-            copyButtons.forEach(function (btn) {
-                btn.addEventListener('click', function (e) {
+            for (var i = 0; i < copyButtons.length; i++) {
+                copyButtons[i].addEventListener('click', function (e) {
                     var shortcode = e.target.getAttribute('data-shortcode');
-                    navigator.clipboard.writeText(shortcode).then(function () {
-                        e.target.innerText = 'Copied!';
-                        setTimeout(function () {
-                            e.target.innerText = 'Copy';
-                        }, 2000);
-                    });
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(shortcode).then(function () {
+                            e.target.innerText = 'Copied!';
+                            setTimeout(function () {
+                                e.target.innerText = 'Copy';
+                            }, 2000);
+                        });
+                    }
                 });
-            });
+            }
         });
         </script>
 		<?php
@@ -997,7 +1015,7 @@ class SSM_Plugin {
 	}
 }
 
-add_action( 'wp_enqueue_scripts', function() {
+function ssm_enqueue_scripts() {
 	wp_enqueue_script( 'stripe-js', 'https://js.stripe.com/v3/', array(), null, true );
 	if ( ! function_exists( 'get_plugin_data' ) ) {
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
@@ -1009,6 +1027,7 @@ add_action( 'wp_enqueue_scripts', function() {
 		'ajax_url'       => admin_url( 'admin-ajax.php' ),
 		'publishableKey' => get_option( 'flw_stripe_public_key', '' ),
 	) );
-} );
+}
+add_action( 'wp_enqueue_scripts', 'ssm_enqueue_scripts' );
 
 new SSM_Plugin();

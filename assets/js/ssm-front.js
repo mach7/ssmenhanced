@@ -23,14 +23,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Stripe is not initialized. Check your public key.');
                 return;
             }
-            // Get the total amount from the DOM
             const totalEl = document.getElementById('ssm-total-amount');
             const amount = totalEl ? parseFloat(totalEl.textContent) : 0;
-            // Prepare form data for creating PaymentIntent
             const formData = new FormData();
             formData.append('action', 'ssm_create_payment_intent');
             formData.append('amount', amount);
-            // If customer info fields are present, append them
             const nameInput = document.getElementById('ssm-customer-name');
             const emailInput = document.getElementById('ssm-customer-email');
             if (nameInput && emailInput) {
@@ -64,7 +61,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 } else {
                     if (result.paymentIntent && result.paymentIntent.status === 'succeeded') {
                         alert('Payment successful! Thank you.');
-                        // Optionally redirect or clear the cart here.
+                        // Optionally, redirect or clear the cart.
                     }
                 }
             })

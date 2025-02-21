@@ -2,7 +2,7 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, checkout functionality, and account creation on checkout.
-Version: 1.6
+Version: 1.6.1
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
@@ -201,7 +201,7 @@ class SSM_Plugin {
         if ($amount <= 0) {
             wp_send_json_error('Invalid amount.');
         }
-        // If user is not logged in, require name and email
+        // If user is not logged in, require name and email (handled in the checkout form)
         if (!is_user_logged_in()) {
             $name  = isset($_POST['ssm_customer_name']) ? sanitize_text_field($_POST['ssm_customer_name']) : '';
             $email = isset($_POST['ssm_customer_email']) ? sanitize_email($_POST['ssm_customer_email']) : '';
@@ -217,7 +217,6 @@ class SSM_Plugin {
                 wp_update_user(['ID' => $user_id, 'display_name' => $name]);
                 global $wpdb;
                 $subscription_role = 'subscriber';
-                // Check if any subscription product in cart has a defined role.
                 foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
                     $product = $wpdb->get_row($wpdb->prepare("SELECT subscription, subscription_user_role FROM {$wpdb->prefix}" . self::PRODUCT_TABLE . " WHERE id = %d", $pid));
                     if ($product && $product->subscription) {
@@ -237,7 +236,6 @@ class SSM_Plugin {
                 wp_set_auth_cookie($user->ID);
             }
         }
-        // At this point, we have a logged-in user.
         $user_id = get_current_user_id();
         $amount_cents = intval($amount * 100);
         $secret_key = get_option('flw_stripe_secret_key', '');
@@ -528,43 +526,39 @@ class SSM_Plugin {
         add_submenu_page('ssm_manager', 'Error Logs', 'Error Logs', 'manage_options', 'ssm_error_logs', [$this, 'render_error_logs_page']);
         add_submenu_page('ssm_manager', 'Instructions', 'Instructions', 'manage_options', 'ssm_instructions', [$this, 'render_instructions_page']);
     }
-    
-    /**
-     * Render the products admin page (list, add, edit, delete).
-     */
+
+    // ------------------ Product Admin Pages ------------------
+
     public function render_products_page() {
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
         $table_rel      = $wpdb->prefix . self::PRODUCT_CAT_REL_TABLE;
         $table_cats     = $wpdb->prefix . self::CATEGORY_TABLE;
-
         $action = isset($_GET['action']) ? sanitize_text_field($_GET['action']) : '';
 
-        // Process deletion if action=delete.
-        if ( $action === 'delete' && isset( $_GET['id'] ) ) {
-            $product_id = intval( $_GET['id'] );
-            $result = $wpdb->delete( $table_products, [ 'id' => $product_id ] );
-            if ( $result !== false ) {
-                // Also remove any category relationships for this product.
-                $wpdb->delete( $table_rel, [ 'product_id' => $product_id ] );
+        if ( $action === 'delete' && isset($_GET['id']) ) {
+            $product_id = intval($_GET['id']);
+            $result = $wpdb->delete($table_products, ['id' => $product_id]);
+            if ($result !== false) {
+                $wpdb->delete($table_rel, ['product_id' => $product_id]);
                 echo '<div class="updated"><p>Product deleted successfully.</p></div>';
             } else {
                 echo '<div class="error"><p>Product deletion failed.</p></div>';
             }
-            // Reset action to display the listing after deletion.
             $action = '';
         }
 
-        // Process form submission for add/edit.
-        if ( isset( $_POST['ssm_product_submit'] ) ) {
-            $name                   = sanitize_text_field( $_POST['name'] );
-            $description            = sanitize_textarea_field( $_POST['description'] );
-            $price                  = floatval( $_POST['price'] );
-            $digital                = isset( $_POST['digital'] ) ? 1 : 0;
-            $subscription           = isset( $_POST['subscription'] ) ? 1 : 0;
-            $subscription_interval  = sanitize_text_field( $_POST['subscription_interval'] );
-            $subscription_price     = floatval( $_POST['subscription_price'] );
-            $categories             = isset( $_POST['categories'] ) ? (array) $_POST['categories'] : array();
+        if ( isset($_POST['ssm_product_submit']) ) {
+            $name                  = sanitize_text_field($_POST['name']);
+            $description           = sanitize_textarea_field($_POST['description']);
+            $price                 = floatval($_POST['price']);
+            $digital               = isset($_POST['digital']) ? 1 : 0;
+            $subscription          = isset($_POST['subscription']) ? 1 : 0;
+            $subscription_interval = sanitize_text_field($_POST['subscription_interval']);
+            $subscription_price    = floatval($_POST['subscription_price']);
+            // New field for subscription user role.
+            $subscription_user_role = isset($_POST['subscription_user_role']) ? sanitize_text_field($_POST['subscription_user_role']) : '';
+            $categories            = isset($_POST['categories']) ? (array) $_POST['categories'] : [];
 
             if ( $action === 'add' ) {
                 $wpdb->insert(
@@ -577,22 +571,22 @@ class SSM_Plugin {
                         'subscription'           => $subscription,
                         'subscription_interval'  => $subscription_interval,
                         'subscription_price'     => $subscription_price,
+                        'subscription_user_role' => $subscription_user_role,
                     ]
                 );
                 $new_product_id = $wpdb->insert_id;
-                // Insert category relationships.
                 foreach ( $categories as $cat_id ) {
                     $wpdb->insert(
                         $table_rel,
                         [
                             'product_id'  => $new_product_id,
-                            'category_id' => intval( $cat_id ),
+                            'category_id' => intval($cat_id),
                         ]
                     );
                 }
                 echo '<div class="updated"><p>Product added successfully.</p></div>';
-            } elseif ( $action === 'edit' && isset( $_GET['id'] ) ) {
-                $product_id = intval( $_GET['id'] );
+            } elseif ( $action === 'edit' && isset($_GET['id']) ) {
+                $product_id = intval($_GET['id']);
                 $wpdb->update(
                     $table_products,
                     [
@@ -603,17 +597,17 @@ class SSM_Plugin {
                         'subscription'           => $subscription,
                         'subscription_interval'  => $subscription_interval,
                         'subscription_price'     => $subscription_price,
+                        'subscription_user_role' => $subscription_user_role,
                     ],
-                    [ 'id' => $product_id ]
+                    ['id' => $product_id]
                 );
-                // Update category relationships: clear existing then reinsert.
-                $wpdb->delete( $table_rel, [ 'product_id' => $product_id ] );
+                $wpdb->delete($table_rel, ['product_id' => $product_id]);
                 foreach ( $categories as $cat_id ) {
                     $wpdb->insert(
                         $table_rel,
                         [
                             'product_id'  => $product_id,
-                            'category_id' => intval( $cat_id ),
+                            'category_id' => intval($cat_id),
                         ]
                     );
                 }
@@ -621,73 +615,72 @@ class SSM_Plugin {
             }
         }
 
-        // If in add/edit mode, display the form.
         if ( $action === 'add' || $action === 'edit' ) {
-            $product    = null;
+            $product = null;
             $product_id = 0;
-            if ( $action === 'edit' && isset( $_GET['id'] ) ) {
-                $product_id = intval( $_GET['id'] );
-                $product    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_products WHERE id = %d", $product_id ) );
-                if ( ! $product ) {
+            if ( $action === 'edit' && isset($_GET['id']) ) {
+                $product_id = intval($_GET['id']);
+                $product = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_products WHERE id = %d", $product_id));
+                if (!$product) {
                     echo '<div class="error"><p>Product not found.</p></div>';
                     return;
                 }
             }
-
-            // Retrieve assigned categories if editing.
-            $assigned_categories = array();
-            if ( $product ) {
-                $assigned_categories = $wpdb->get_col( $wpdb->prepare( "SELECT category_id FROM $table_rel WHERE product_id = %d", $product_id ) );
-            }
-
-            // Retrieve all available categories.
-            $all_categories = $wpdb->get_results( "SELECT * FROM $table_cats ORDER BY name", ARRAY_A );
+            $assigned_categories = ($product) ? $wpdb->get_col($wpdb->prepare("SELECT category_id FROM $table_rel WHERE product_id = %d", $product_id)) : [];
+            $all_categories = $wpdb->get_results("SELECT * FROM $table_cats ORDER BY name", ARRAY_A);
             ?>
             <div class="wrap">
-                <h1><?php echo ( $action === 'add' ) ? 'Add New Product' : 'Edit Product'; ?></h1>
+                <h1><?php echo ($action === 'add') ? 'Add New Product' : 'Edit Product'; ?></h1>
                 <form method="post">
                     <table class="form-table">
                         <tr>
                             <th><label for="ssm_product_name">Product Name</label></th>
-                            <td><input type="text" name="name" id="ssm_product_name" value="<?php echo $product ? esc_attr( $product->name ) : ''; ?>" required></td>
+                            <td><input type="text" name="name" id="ssm_product_name" value="<?php echo $product ? esc_attr($product->name) : ''; ?>" required></td>
                         </tr>
                         <tr>
                             <th><label for="ssm_product_description">Description</label></th>
-                            <td><textarea name="description" id="ssm_product_description" rows="5" cols="50"><?php echo $product ? esc_textarea( $product->description ) : ''; ?></textarea></td>
+                            <td><textarea name="description" id="ssm_product_description" rows="5" cols="50"><?php echo $product ? esc_textarea($product->description) : ''; ?></textarea></td>
                         </tr>
                         <tr>
                             <th><label for="ssm_product_price">Price</label></th>
-                            <td><input type="number" step="0.01" name="price" id="ssm_product_price" value="<?php echo $product ? esc_attr( $product->price ) : ''; ?>" required></td>
+                            <td><input type="number" step="0.01" name="price" id="ssm_product_price" value="<?php echo $product ? esc_attr($product->price) : ''; ?>" required></td>
                         </tr>
                         <tr>
                             <th><label for="ssm_product_digital">Digital Product</label></th>
-                            <td><input type="checkbox" name="digital" id="ssm_product_digital" <?php checked( $product && $product->digital, 1 ); ?>></td>
+                            <td><input type="checkbox" name="digital" id="ssm_product_digital" <?php checked($product && $product->digital, 1); ?>></td>
                         </tr>
                         <tr>
                             <th><label for="ssm_product_subscription">Subscription Product</label></th>
-                            <td><input type="checkbox" name="subscription" id="ssm_product_subscription" <?php checked( $product && $product->subscription, 1 ); ?>></td>
+                            <td><input type="checkbox" name="subscription" id="ssm_product_subscription" <?php checked($product && $product->subscription, 1); ?>></td>
                         </tr>
                         <tr>
                             <th><label for="ssm_subscription_interval">Subscription Interval</label></th>
                             <td>
                                 <select name="subscription_interval" id="ssm_subscription_interval">
-                                    <option value="monthly" <?php selected( $product ? $product->subscription_interval : '', 'monthly' ); ?>>Monthly</option>
-                                    <option value="yearly" <?php selected( $product ? $product->subscription_interval : '', 'yearly' ); ?>>Yearly</option>
+                                    <option value="monthly" <?php selected($product ? $product->subscription_interval : '', 'monthly'); ?>>Monthly</option>
+                                    <option value="yearly" <?php selected($product ? $product->subscription_interval : '', 'yearly'); ?>>Yearly</option>
                                 </select>
                             </td>
                         </tr>
                         <tr>
                             <th><label for="ssm_subscription_price">Subscription Price</label></th>
-                            <td><input type="number" step="0.01" name="subscription_price" id="ssm_subscription_price" value="<?php echo $product ? esc_attr( $product->subscription_price ) : ''; ?>"></td>
+                            <td><input type="number" step="0.01" name="subscription_price" id="ssm_subscription_price" value="<?php echo $product ? esc_attr($product->subscription_price) : ''; ?>"></td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_subscription_user_role">Subscription User Role</label></th>
+                            <td>
+                                <input type="text" name="subscription_user_role" id="ssm_subscription_user_role" value="<?php echo $product ? esc_attr($product->subscription_user_role) : ''; ?>" placeholder="e.g., premium_member">
+                                <p class="description">Role to assign upon successful subscription (defaults to 'subscriber' if left blank).</p>
+                            </td>
                         </tr>
                         <tr>
                             <th>Categories</th>
                             <td>
-                                <?php if ( $all_categories ) : ?>
-                                    <?php foreach ( $all_categories as $cat ) : ?>
+                                <?php if ($all_categories) : ?>
+                                    <?php foreach ($all_categories as $cat) : ?>
                                         <label style="display:block;">
-                                            <input type="checkbox" name="categories[]" value="<?php echo intval( $cat['id'] ); ?>" <?php if ( in_array( $cat['id'], $assigned_categories ) ) echo 'checked'; ?>>
-                                            <?php echo esc_html( $cat['name'] ); ?>
+                                            <input type="checkbox" name="categories[]" value="<?php echo intval($cat['id']); ?>" <?php if (in_array($cat['id'], $assigned_categories)) echo 'checked'; ?>>
+                                            <?php echo esc_html($cat['name']); ?>
                                         </label>
                                     <?php endforeach; ?>
                                 <?php else : ?>
@@ -696,26 +689,22 @@ class SSM_Plugin {
                             </td>
                         </tr>
                     </table>
-                    <?php submit_button( ( $action === 'add' ) ? 'Add Product' : 'Update Product', 'primary', 'ssm_product_submit' ); ?>
+                    <?php submit_button(($action === 'add') ? 'Add Product' : 'Update Product', 'primary', 'ssm_product_submit'); ?>
                 </form>
             </div>
             <?php
             return;
         }
 
-        // Default mode: List products.
-        $search = isset( $_GET['ssm_search'] ) ? sanitize_text_field( $_GET['ssm_search'] ) : '';
-        $where  = '';
-        if ( $search ) {
-            $where = $wpdb->prepare( "WHERE name LIKE %s", '%' . $wpdb->esc_like( $search ) . '%' );
-        }
-        $products = $wpdb->get_results( "SELECT * FROM $table_products $where ORDER BY id DESC" );
+        $search = isset($_GET['ssm_search']) ? sanitize_text_field($_GET['ssm_search']) : '';
+        $where  = ($search) ? $wpdb->prepare("WHERE name LIKE %s", '%' . $wpdb->esc_like($search) . '%') : '';
+        $products = $wpdb->get_results("SELECT * FROM $table_products $where ORDER BY id DESC");
         ?>
         <div class="wrap">
             <h1>Products</h1>
             <form method="get">
                 <input type="hidden" name="page" value="ssm_products">
-                <input type="text" name="ssm_search" value="<?php echo esc_attr( $search ); ?>" placeholder="Search Products">
+                <input type="text" name="ssm_search" value="<?php echo esc_attr($search); ?>" placeholder="Search Products">
                 <input type="submit" value="Search">
             </form>
             <table class="wp-list-table widefat fixed striped">
@@ -730,22 +719,22 @@ class SSM_Plugin {
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if ( $products ) : ?>
-                        <?php foreach ( $products as $p ) : 
+                    <?php if ($products) : ?>
+                        <?php foreach ($products as $p) : 
                             $shortcode = '[ssm_add_to_cart product_id="' . $p->id . '"]';
                         ?>
                             <tr>
-                                <td><?php echo esc_html( $p->id ); ?></td>
-                                <td><?php echo esc_html( $p->name ); ?></td>
-                                <td>$<?php echo number_format( $p->price, 2 ); ?></td>
+                                <td><?php echo esc_html($p->id); ?></td>
+                                <td><?php echo esc_html($p->name); ?></td>
+                                <td>$<?php echo number_format($p->price, 2); ?></td>
                                 <td><?php echo $p->subscription ? 'Yes' : 'No'; ?></td>
                                 <td>
-                                    <input type="text" class="ssm-shortcode-field" value="<?php echo esc_attr( $shortcode ); ?>" readonly style="width:100%; margin-bottom:4px;">
-                                    <button type="button" class="button ssm-copy-btn" data-shortcode="<?php echo esc_attr( $shortcode ); ?>">Copy</button>
+                                    <input type="text" class="ssm-shortcode-field" value="<?php echo esc_attr($shortcode); ?>" readonly style="width:100%; margin-bottom:4px;">
+                                    <button type="button" class="button ssm-copy-btn" data-shortcode="<?php echo esc_attr($shortcode); ?>">Copy</button>
                                 </td>
                                 <td>
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=edit&id=' . $p->id ); ?>">Edit</a> | 
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=delete&id=' . $p->id ); ?>" onclick="return confirm('Are you sure?');">Delete</a>
+                                    <a href="<?php echo admin_url('admin.php?page=ssm_products&action=edit&id=' . $p->id); ?>">Edit</a> | 
+                                    <a href="<?php echo admin_url('admin.php?page=ssm_products&action=delete&id=' . $p->id); ?>" onclick="return confirm('Are you sure?');">Delete</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -754,7 +743,7 @@ class SSM_Plugin {
                     <?php endif; ?>
                 </tbody>
             </table>
-            <p><a href="<?php echo admin_url( 'admin.php?page=ssm_products&action=add' ); ?>" class="button button-primary">Add New Product</a></p>
+            <p><a href="<?php echo admin_url('admin.php?page=ssm_products&action=add'); ?>" class="button button-primary">Add New Product</a></p>
         </div>
         <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -774,51 +763,40 @@ class SSM_Plugin {
         </script>
         <?php
     }
-    
-    /**
-     * Render the Categories admin page.
-     */
+
     public function render_categories_page() {
         global $wpdb;
         $table_categories = $wpdb->prefix . self::CATEGORY_TABLE;
         $table_rel = $wpdb->prefix . self::PRODUCT_CAT_REL_TABLE;
-        $action = isset( $_GET['action'] ) ? sanitize_text_field($_GET['action']) : '';
-
-        // Process deletion if action=delete.
-        if ( $action === 'delete' && isset( $_GET['id'] ) ) {
-            $cat_id = intval( $_GET['id'] );
-            $result = $wpdb->delete( $table_categories, [ 'id' => $cat_id ] );
-            if ( $result !== false ) {
-                // Also remove relationships with products.
-                $wpdb->delete( $table_rel, [ 'category_id' => $cat_id ] );
+        $action = isset($_GET['action']) ? sanitize_text_field($_GET['action']) : '';
+        if ( $action === 'delete' && isset($_GET['id']) ) {
+            $cat_id = intval($_GET['id']);
+            $result = $wpdb->delete($table_categories, ['id' => $cat_id]);
+            if ($result !== false) {
+                $wpdb->delete($table_rel, ['category_id' => $cat_id]);
                 echo '<div class="updated"><p>Category deleted successfully.</p></div>';
             } else {
                 echo '<div class="error"><p>Category deletion failed.</p></div>';
             }
-            // Reset action to display the listing after deletion.
             $action = '';
         }
-
-        // Process form submission for add/edit.
-        if ( isset( $_POST['ssm_category_submit'] ) ) {
-            $cat_name = sanitize_text_field( $_POST['name'] );
+        if ( isset($_POST['ssm_category_submit']) ) {
+            $cat_name = sanitize_text_field($_POST['name']);
             if ( $action === 'add' ) {
-                $wpdb->insert( $table_categories, [ 'name' => $cat_name ] );
+                $wpdb->insert($table_categories, ['name' => $cat_name]);
                 echo '<div class="updated"><p>Category added successfully.</p></div>';
-            } elseif ( $action === 'edit' && isset( $_GET['id'] ) ) {
-                $cat_id = intval( $_GET['id'] );
-                $wpdb->update( $table_categories, [ 'name' => $cat_name ], [ 'id' => $cat_id ] );
+            } elseif ( $action === 'edit' && isset($_GET['id']) ) {
+                $cat_id = intval($_GET['id']);
+                $wpdb->update($table_categories, ['name' => $cat_name], ['id' => $cat_id]);
                 echo '<div class="updated"><p>Category updated successfully.</p></div>';
             }
         }
-
-        // If in add/edit mode, display the form.
         if ( $action === 'add' || $action === 'edit' ) {
             $category = null;
             $cat_id = 0;
-            if ( $action === 'edit' && isset( $_GET['id'] ) ) {
-                $cat_id = intval( $_GET['id'] );
-                $category = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table_categories WHERE id = %d", $cat_id ) );
+            if ( $action === 'edit' && isset($_GET['id']) ) {
+                $cat_id = intval($_GET['id']);
+                $category = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_categories WHERE id = %d", $cat_id));
                 if ( ! $category ) {
                     echo '<div class="error"><p>Category not found.</p></div>';
                     return;
@@ -826,25 +804,23 @@ class SSM_Plugin {
             }
             ?>
             <div class="wrap">
-                <h1><?php echo ( $action === 'add' ) ? 'Add New Category' : 'Edit Category'; ?></h1>
+                <h1><?php echo ($action === 'add') ? 'Add New Category' : 'Edit Category'; ?></h1>
                 <form method="post">
                     <table class="form-table">
                         <tr>
                             <th><label for="ssm_category_name">Category Name</label></th>
                             <td>
-                                <input type="text" name="name" id="ssm_category_name" value="<?php echo $category ? esc_attr( $category->name ) : ''; ?>" required>
+                                <input type="text" name="name" id="ssm_category_name" value="<?php echo $category ? esc_attr($category->name) : ''; ?>" required>
                             </td>
                         </tr>
                     </table>
-                    <?php submit_button( ( $action === 'add' ) ? 'Add Category' : 'Update Category', 'primary', 'ssm_category_submit' ); ?>
+                    <?php submit_button(($action === 'add') ? 'Add Category' : 'Update Category', 'primary', 'ssm_category_submit'); ?>
                 </form>
             </div>
             <?php
             return;
         }
-
-        // Default mode: List categories.
-        $categories = $wpdb->get_results( "SELECT * FROM $table_categories ORDER BY name" );
+        $categories = $wpdb->get_results("SELECT * FROM $table_categories ORDER BY name");
         ?>
         <div class="wrap">
             <h1>Product Categories</h1>
@@ -860,11 +836,11 @@ class SSM_Plugin {
                     <?php if ( $categories ) : ?>
                         <?php foreach ( $categories as $cat ) : ?>
                             <tr>
-                                <td><?php echo esc_html( $cat->id ); ?></td>
-                                <td><?php echo esc_html( $cat->name ); ?></td>
+                                <td><?php echo esc_html($cat->id); ?></td>
+                                <td><?php echo esc_html($cat->name); ?></td>
                                 <td>
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=edit&id=' . $cat->id ); ?>">Edit</a> |
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=delete&id=' . $cat->id ); ?>" onclick="return confirm('Are you sure you want to delete this category?');">Delete</a>
+                                    <a href="<?php echo admin_url('admin.php?page=ssm_categories&action=edit&id=' . $cat->id); ?>">Edit</a> |
+                                    <a href="<?php echo admin_url('admin.php?page=ssm_categories&action=delete&id=' . $cat->id); ?>" onclick="return confirm('Are you sure you want to delete this category?');">Delete</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -873,21 +849,16 @@ class SSM_Plugin {
                     <?php endif; ?>
                 </tbody>
             </table>
-            <p><a href="<?php echo admin_url( 'admin.php?page=ssm_categories&action=add' ); ?>" class="button button-primary">Add New Category</a></p>
+            <p><a href="<?php echo admin_url('admin.php?page=ssm_categories&action=add'); ?>" class="button button-primary">Add New Category</a></p>
         </div>
         <?php
     }
-    
-    /**
-     * Render the API Key Management admin page.
-     * Lists all users with an API key and offers manual controls.
-     */
+
     public function render_api_keys_page() {
-        // For simplicity, we assume API keys are stored as user meta.
-        $users = get_users( [
+        $users = get_users([
             'meta_key' => 'ssm_api_key',
             'meta_compare' => 'EXISTS'
-        ] );
+        ]);
         ?>
         <div class="wrap">
             <h1>API Key Management</h1>
@@ -902,19 +873,19 @@ class SSM_Plugin {
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if ( $users ) : ?>
-                        <?php foreach ( $users as $user ) : 
-                            $api_key = get_user_meta( $user->ID, 'ssm_api_key', true );
-                            $expiry  = get_user_meta( $user->ID, 'ssm_api_key_expiry', true );
+                    <?php if ($users) : ?>
+                        <?php foreach ($users as $user) : 
+                            $api_key = get_user_meta($user->ID, 'ssm_api_key', true);
+                            $expiry  = get_user_meta($user->ID, 'ssm_api_key_expiry', true);
                         ?>
                             <tr>
-                                <td><?php echo esc_html( $user->display_name ); ?></td>
-                                <td><?php echo esc_html( $user->user_email ); ?></td>
-                                <td><?php echo esc_html( $api_key ); ?></td>
-                                <td><?php echo esc_html( $expiry ); ?></td>
+                                <td><?php echo esc_html($user->display_name); ?></td>
+                                <td><?php echo esc_html($user->user_email); ?></td>
+                                <td><?php echo esc_html($api_key); ?></td>
+                                <td><?php echo esc_html($expiry); ?></td>
                                 <td>
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_api_keys&action=expire&user=' . $user->ID ); ?>">Expire</a> | 
-                                    <a href="<?php echo admin_url( 'admin.php?page=ssm_api_keys&action=reissue&user=' . $user->ID ); ?>">Reissue</a>
+                                    <a href="<?php echo admin_url('admin.php?page=ssm_api_keys&action=expire&user=' . $user->ID); ?>">Expire</a> | 
+                                    <a href="<?php echo admin_url('admin.php?page=ssm_api_keys&action=reissue&user=' . $user->ID); ?>">Reissue</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -926,46 +897,39 @@ class SSM_Plugin {
         </div>
         <?php
     }
-    
-    /**
-     * Render the Error Logs admin page.
-     * Reads the WP debug log (if exists), allows filtering by error type, and offers a clear logs option.
-     */
+
     public function render_error_logs_page() {
         $log_file = WP_CONTENT_DIR . '/debug.log';
-        $filter   = isset( $_GET['filter'] ) ? sanitize_text_field( $_GET['filter'] ) : '';
-
-        // Handle clear log request (if submitted)
-        if ( isset( $_POST['ssm_clear_logs'] ) ) {
-            if ( file_exists( $log_file ) ) {
-                file_put_contents( $log_file, '' );
+        $filter   = isset($_GET['filter']) ? sanitize_text_field($_GET['filter']) : '';
+        if ( isset($_POST['ssm_clear_logs']) ) {
+            if ( file_exists($log_file) ) {
+                file_put_contents($log_file, '');
                 echo '<div class="updated"><p>Error log cleared.</p></div>';
             }
         }
-
         ?>
         <div class="wrap">
             <h1>Error Logs</h1>
             <form method="get">
                 <input type="hidden" name="page" value="ssm_error_logs">
-                <input type="text" name="filter" value="<?php echo esc_attr( $filter ); ?>" placeholder="Filter by error type">
+                <input type="text" name="filter" value="<?php echo esc_attr($filter); ?>" placeholder="Filter by error type">
                 <input type="submit" value="Filter">
             </form>
             <form method="post">
-                <?php submit_button( 'Clear Logs', 'secondary', 'ssm_clear_logs' ); ?>
+                <?php submit_button('Clear Logs', 'secondary', 'ssm_clear_logs'); ?>
             </form>
             <pre style="background: #f7f7f7; padding: 10px; max-height: 500px; overflow: auto;">
 <?php
-if ( file_exists( $log_file ) ) {
-    $logs = file( $log_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
-    if ( $filter ) {
-        foreach ( $logs as $line ) {
-            if ( strpos( $line, $filter ) !== false ) {
-                echo esc_html( $line ) . "\n";
+if ( file_exists($log_file) ) {
+    $logs = file($log_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if ($filter) {
+        foreach ($logs as $line) {
+            if (strpos($line, $filter) !== false) {
+                echo esc_html($line) . "\n";
             }
         }
     } else {
-        echo esc_html( implode( "\n", $logs ) );
+        echo esc_html(implode("\n", $logs));
     }
 } else {
     echo 'No debug log file found.';
@@ -975,20 +939,17 @@ if ( file_exists( $log_file ) ) {
         </div>
         <?php
     }
-    
-    /**
-     * Render the Instructions page.
-     */
+
     public function render_instructions_page() {
         ?>
         <div class="wrap">
             <h1>Plugin Instructions</h1>
             <h2>Product Management</h2>
-            <p>Use the Products and Categories pages to add, edit, delete, and filter products and categories. Products include attributes such as name, description, price, digital flag, subscription flag, subscription interval, and subscription price.</p>
+            <p>Use the Products and Categories pages to add, edit, delete, and filter products and categories. Products include attributes such as name, description, price, digital flag, subscription flag, subscription interval, subscription price, and <strong>subscription user role</strong> (the role to assign when a subscription is purchased).</p>
             <h2>Shortcode Integration</h2>
             <p>Embed products in your posts/pages using the <code>[ssm_add_to_cart product_id="123"]</code> shortcode.</p>
             <h2>Checkout</h2>
-            <p>Add the <code>[ssm_checkout]</code> shortcode to a page to display the cart summary and a "Proceed to Checkout" button.</p>
+            <p>Add the <code>[ssm_checkout]</code> shortcode to a page to display the cart summary, customer details fields (if not logged in), and a Stripe payment form.</p>
             <h2>Stripe Webhook & API Key Management</h2>
             <p>Stripe events are handled on-site. On a successful subscription, the plugin automatically creates or updates an API key. Subscription cancellations and payment failures trigger API key expiration. Manual controls are available in the API Key Management page.</p>
             <h2>Subscription Management</h2>
@@ -998,10 +959,7 @@ if ( file_exists( $log_file ) ) {
         </div>
         <?php
     }
-    
-    /**
-     * Daily cron for renewal reminders
-     */
+
     public function send_renewal_reminders() {
         $users = get_users([
             'meta_key'     => 'ssm_api_key_expiry',
@@ -1024,7 +982,6 @@ if ( file_exists( $log_file ) ) {
     }
 }
 
-// Enqueue front-end script with plugin version
 add_action('wp_enqueue_scripts', function() {
     wp_enqueue_script('stripe-js', 'https://js.stripe.com/v3/', [], null, true);
     if (!function_exists('get_plugin_data')) {
@@ -1034,10 +991,9 @@ add_action('wp_enqueue_scripts', function() {
     $version = isset($plugin_data['Version']) ? $plugin_data['Version'] : '1.0';
     wp_enqueue_script('ssm-front', plugins_url('assets/js/ssm-front.js', __FILE__), [], $version, true);
     wp_localize_script('ssm-front', 'ssm_params', [
-        'ajax_url' => admin_url('admin-ajax.php'),
+        'ajax_url'       => admin_url('admin-ajax.php'),
         'publishableKey' => get_option('flw_stripe_public_key', ''),
     ]);
 });
 
-// Initialize the main plugin
 new SSM_Plugin();

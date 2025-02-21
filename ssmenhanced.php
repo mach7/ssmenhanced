@@ -228,87 +228,95 @@ class SSM_Plugin {
 	}
 
 	public function ajax_create_payment_intent() {
-		$amount = isset( $_POST['amount'] ) ? floatval( $_POST['amount'] ) : 0;
-		if ( $amount <= 0 ) {
-			wp_send_json_error( 'Invalid amount.' );
-		}
-		// If user is not logged in, require name and email (handled in the checkout form)
-		if ( ! is_user_logged_in() ) {
-			$name  = isset( $_POST['ssm_customer_name'] ) ? sanitize_text_field( $_POST['ssm_customer_name'] ) : '';
-			$email = isset( $_POST['ssm_customer_email'] ) ? sanitize_email( $_POST['ssm_customer_email'] ) : '';
-			if ( empty( $name ) || empty( $email ) ) {
-				wp_send_json_error( 'Name and email are required for checkout.' );
-			}
-			if ( ! email_exists( $email ) ) {
-				$random_password = wp_generate_password( 12, false );
-				$user_id         = wp_create_user( $email, $random_password, $email );
-				if ( is_wp_error( $user_id ) ) {
-					wp_send_json_error( 'User creation failed: ' . $user_id->get_error_message() );
-				}
-				wp_update_user( array( 'ID' => $user_id, 'display_name' => $name ) );
-				global $wpdb;
-				$subscription_role = 'subscriber';
-				foreach ( $_SESSION['ssm_cart'] as $pid => $qty ) {
-					$product = $wpdb->get_row( $wpdb->prepare( "SELECT subscription, subscription_user_role FROM {$wpdb->prefix}" . self::PRODUCT_TABLE . " WHERE id = %d", $pid ) );
-					if ( $product && $product->subscription ) {
-						if ( ! empty( $product->subscription_user_role ) ) {
-							$subscription_role = $product->subscription_user_role;
-						}
-						break;
-					}
-				}
-				$user = new WP_User( $user_id );
-				$user->set_role( $subscription_role );
-				wp_set_current_user( $user_id );
-				wp_set_auth_cookie( $user_id );
-			} else {
-				$user = get_user_by( 'email', $email );
-				wp_set_current_user( $user->ID );
-				wp_set_auth_cookie( $user->ID );
-			}
-		}
-		$user_id      = get_current_user_id();
-		$amount_cents = intval( $amount * 100 );
-		$secret_key   = get_option( 'flw_stripe_secret_key', '' );
-		if ( ! $secret_key ) {
-			wp_send_json_error( 'Stripe secret key not found.' );
-		}
-		$current_user = wp_get_current_user();
-		$metadata     = array(
-			'user_id'        => $user_id,
-			'customer_name'  => $current_user->display_name,
-			'customer_email' => $current_user->user_email,
-		);
-		$ch           = curl_init( 'https://api.stripe.com/v1/payment_intents' );
-		$data         = array(
-			'amount'               => $amount_cents,
-			'currency'             => 'usd',
-			'payment_method_types' => array( 'card' ),
-			'description'          => 'SSM Cart Payment',
-		);
-		foreach ( $metadata as $key => $value ) {
-			$data["metadata[$key]"] = $value;
-		}
-		curl_setopt( $ch, CURLOPT_USERPWD, $secret_key . ':' );
-		curl_setopt( $ch, CURLOPT_POST, true );
-		curl_setopt( $ch, CURLOPT_POSTFIELDS, http_build_query( $data ) );
-		curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-		$response = curl_exec( $ch );
-		$error    = curl_error( $ch );
-		curl_close( $ch );
-		if ( $error ) {
-			wp_send_json_error( 'cURL error: ' . $error );
-		}
-		$result = json_decode( $response, true );
-		if ( isset( $result['error'] ) ) {
-			wp_send_json_error( 'Stripe error: ' . $result['error']['message'] );
-		}
-		if ( isset( $result['client_secret'] ) ) {
-			wp_send_json_success( array( 'client_secret' => $result['client_secret'] ) );
-		} else {
-			wp_send_json_error( 'No client_secret in Stripe response.' );
-		}
-	}
+        // Start output buffering and immediately clear any existing output
+        if (ob_get_length()) {
+            ob_end_clean();
+        }
+        
+        $amount = isset($_POST['amount']) ? floatval($_POST['amount']) : 0;
+        if ($amount <= 0) {
+            wp_send_json_error('Invalid amount.');
+        }
+        
+        // If user is not logged in, require name and email.
+        if (!is_user_logged_in()) {
+            $name  = isset($_POST['ssm_customer_name']) ? sanitize_text_field($_POST['ssm_customer_name']) : '';
+            $email = isset($_POST['ssm_customer_email']) ? sanitize_email($_POST['ssm_customer_email']) : '';
+            if (empty($name) || empty($email)) {
+                wp_send_json_error('Name and email are required for checkout.');
+            }
+            if (!email_exists($email)) {
+                $random_password = wp_generate_password(12, false);
+                $user_id = wp_create_user($email, $random_password, $email);
+                if (is_wp_error($user_id)) {
+                    wp_send_json_error('User creation failed: ' . $user_id->get_error_message());
+                }
+                wp_update_user(['ID' => $user_id, 'display_name' => $name]);
+                global $wpdb;
+                $subscription_role = 'subscriber';
+                foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
+                    $product = $wpdb->get_row($wpdb->prepare("SELECT subscription, subscription_user_role FROM {$wpdb->prefix}" . self::PRODUCT_TABLE . " WHERE id = %d", $pid));
+                    if ($product && $product->subscription) {
+                        if (!empty($product->subscription_user_role)) {
+                            $subscription_role = $product->subscription_user_role;
+                        }
+                        break;
+                    }
+                }
+                $user = new WP_User($user_id);
+                $user->set_role($subscription_role);
+                wp_set_current_user($user_id);
+                wp_set_auth_cookie($user_id);
+            } else {
+                $user = get_user_by('email', $email);
+                wp_set_current_user($user->ID);
+                wp_set_auth_cookie($user->ID);
+            }
+        }
+        
+        $user_id = get_current_user_id();
+        $amount_cents = intval($amount * 100);
+        $secret_key = get_option('flw_stripe_secret_key', '');
+        if (!$secret_key) {
+            wp_send_json_error('Stripe secret key not found.');
+        }
+        $current_user = wp_get_current_user();
+        $metadata = [
+            'user_id'        => $user_id,
+            'customer_name'  => $current_user->display_name,
+            'customer_email' => $current_user->user_email,
+        ];
+        $ch = curl_init('https://api.stripe.com/v1/payment_intents');
+        $data = [
+            'amount'               => $amount_cents,
+            'currency'             => 'usd',
+            'payment_method_types' => ['card'],
+            'description'          => 'SSM Cart Payment',
+        ];
+        foreach ($metadata as $key => $value) {
+            $data["metadata[$key]"] = $value;
+        }
+        curl_setopt($ch, CURLOPT_USERPWD, $secret_key . ':');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+        if ($error) {
+            wp_send_json_error('cURL error: ' . $error);
+        }
+        $result = json_decode($response, true);
+        if (isset($result['error'])) {
+            wp_send_json_error('Stripe error: ' . $result['error']['message']);
+        }
+        if (isset($result['client_secret'])) {
+            wp_send_json_success(['client_secret' => $result['client_secret']]);
+        } else {
+            wp_send_json_error('No client_secret in Stripe response.');
+        }
+    }
+    
 
 	public function maybe_handle_stripe_webhook() {
 		if ( isset( $_GET['ssm_webhook'] ) && $_GET['ssm_webhook'] === 'stripe' ) {

@@ -23,11 +23,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Stripe is not initialized. Check your public key.');
                 return;
             }
+            // Get the total amount from the DOM and validate it
             const totalEl = document.getElementById('ssm-total-amount');
-            const amount = totalEl ? parseFloat(totalEl.textContent) : 0;
+            const amountText = totalEl ? totalEl.textContent.trim() : '';
+            const amount = parseFloat(amountText);
+            console.log("Calculated amount:", amount);
+            if (!amount || amount <= 0) {
+                alert("Invalid amount calculated: " + amount);
+                return;
+            }
+            // Create PaymentIntent via AJAX
             const formData = new FormData();
             formData.append('action', 'ssm_create_payment_intent');
             formData.append('amount', amount);
+            // Append customer info if provided
             const nameInput = document.getElementById('ssm-customer-name');
             const emailInput = document.getElementById('ssm-customer-email');
             if (nameInput && emailInput) {

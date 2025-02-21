@@ -81,9 +81,6 @@ add_action('plugins_loaded', function () {
         });
     }
 });
-if ( defined('FLW_PLUGIN_LIBRARY_DISABLED') && FLW_PLUGIN_LIBRARY_DISABLED ) {
-    return '<p style="color:red;">My Google Reviews is disabled because the FLW Plugin Library API key is invalid or expired. Please update the API key in Global Settings.</p>';
-}
 
 /*-----------------------------
     SSM Plugin Main Code

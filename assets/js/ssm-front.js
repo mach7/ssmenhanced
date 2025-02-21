@@ -1,17 +1,20 @@
 document.addEventListener('DOMContentLoaded', function () {
-    // Initialize Stripe with your publishable key
-    const stripePublicKey = (typeof ssm_params.publishableKey !== 'undefined') 
-        ? ssm_params.publishableKey 
-        : '';
+    // --- Initialize Stripe Payment Form ---
+    const cardElementContainer = document.getElementById('card-element');
     let stripe, cardElement;
-    if (stripePublicKey) {
-        stripe = Stripe(stripePublicKey);
-        const elements = stripe.elements();
-        cardElement = elements.create('card');
-        cardElement.mount('#card-element');
+    if (cardElementContainer) {
+        const stripePublicKey = (typeof ssm_params.publishableKey !== 'undefined')
+            ? ssm_params.publishableKey
+            : '';
+        if (stripePublicKey) {
+            stripe = Stripe(stripePublicKey);
+            const elements = stripe.elements();
+            cardElement = elements.create('card');
+            cardElement.mount(cardElementContainer);
+        }
     }
 
-    // Handle Stripe form submission
+    // Handle Stripe form submission if present
     const stripeForm = document.getElementById('ssm-stripe-form');
     if (stripeForm) {
         stripeForm.addEventListener('submit', function (event) {
@@ -20,15 +23,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Stripe is not initialized. Check your public key.');
                 return;
             }
-            // Read the total from the DOM
+            // Read the total amount from the DOM
             const totalEl = document.getElementById('ssm-total-amount');
             const amount = totalEl ? parseFloat(totalEl.textContent) : 0;
-
-            // 1) Create PaymentIntent via AJAX
+            // Create PaymentIntent via AJAX
             const formData = new FormData();
-            formData.append('action', 'ssm_create_payment_intent'); // <--- custom AJAX action
+            formData.append('action', 'ssm_create_payment_intent');
             formData.append('amount', amount);
-
             fetch(ssm_params.ajax_url, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -39,7 +40,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!json.success) {
                     throw new Error(json.data || 'Error creating PaymentIntent.');
                 }
-                // 2) Confirm the payment on the front end
                 const clientSecret = json.data.client_secret;
                 return stripe.confirmCardPayment(clientSecret, {
                     payment_method: {
@@ -49,18 +49,15 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .then(result => {
                 if (result.error) {
-                    // Show error to your customer (e.g., insufficient funds)
                     console.error('Payment error:', result.error.message);
                     const errorDiv = document.getElementById('card-errors');
                     if (errorDiv) {
                         errorDiv.textContent = result.error.message;
                     }
                 } else {
-                    // Payment succeeded
                     if (result.paymentIntent && result.paymentIntent.status === 'succeeded') {
                         alert('Payment successful! Thank you.');
-                        // Optionally redirect or clear cart
-                        // window.location.href = '/thank-you';
+                        // Optionally, redirect to a thank-you page or clear the cart.
                     }
                 }
             })
@@ -73,12 +70,12 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
-    // --- Add to Cart functionality ---
+
+    // --- Existing Add to Cart functionality ---
     const addToCartButtons = document.querySelectorAll('.ssm-add-to-cart-btn');
     addToCartButtons.forEach(function (button) {
         button.addEventListener('click', function (event) {
             event.preventDefault();
-
             const productElement = button.closest('.ssm-product');
             if (!productElement) {
                 console.error('Product container element not found.');
@@ -89,15 +86,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 console.error('Product ID not found in the data attributes.');
                 return;
             }
-
             button.disabled = true;
             const originalText = button.textContent;
             button.textContent = 'Adding...';
-
             const formData = new FormData();
             formData.append('action', 'ssm_add_to_cart');
             formData.append('product_id', productId);
-
             fetch(ssm_params.ajax_url, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -105,9 +99,7 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .then(response => response.json())
             .then(json => {
-                // WordPress returns { success: bool, data: {...} }
                 if (json.success) {
-                    // "cart_total" is inside json.data
                     const result = json.data;
                     button.textContent = 'Added';
                     if (typeof result.cart_total !== 'undefined') {
@@ -117,7 +109,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     }
                 } else {
-                    // "json.data" might hold an error message
                     const errorMsg = (json.data) ? json.data : 'An unexpected error occurred.';
                     console.error('Error adding product to cart:', errorMsg);
                     button.textContent = 'Error';
@@ -152,20 +143,14 @@ document.addEventListener('DOMContentLoaded', function () {
         })
         .then(response => response.json())
         .then(json => {
-            // WordPress returns { success: bool, data: {...} }
             if (json.success) {
                 const result = json.data;
-                // Update the input field
                 qtyElement.value = newQuantity;
-
-                // Update product subtotal in the current row
                 const row = qtyElement.closest('tr');
                 const subtotalCell = row.querySelector('.ssm-subtotal');
                 if (subtotalCell && typeof result.product_subtotal !== 'undefined') {
                     subtotalCell.textContent = '$' + parseFloat(result.product_subtotal).toFixed(2);
                 }
-
-                // Update overall total
                 const totalDisplay = document.querySelector('.ssm-total');
                 if (totalDisplay && typeof result.total_price !== 'undefined') {
                     totalDisplay.textContent = 'Total: $' + parseFloat(result.total_price).toFixed(2);

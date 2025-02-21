@@ -2,7 +2,7 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
-Version: 1.5.4
+Version: 1.5.5
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
@@ -150,6 +150,9 @@ class SSM_Plugin {
         add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
         add_action( 'wp_ajax_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
         add_action( 'wp_ajax_nopriv_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
+        add_action('wp_ajax_ssm_create_payment_intent', [$this, 'ajax_create_payment_intent']);
+        add_action('wp_ajax_nopriv_ssm_create_payment_intent', [$this, 'ajax_create_payment_intent']);
+
     }
     
     /**
@@ -220,6 +223,60 @@ class SSM_Plugin {
         wp_send_json_success([
             'cart_total' => $cart_total
         ]);
+    }
+    /**
+     * AJAX handler to create a PaymentIntent for Stripe.
+     */
+    public function ajax_create_payment_intent() {
+        // Retrieve the total from POST.
+        $amount = isset($_POST['amount']) ? floatval($_POST['amount']) : 0;
+        if ($amount <= 0) {
+            wp_send_json_error('Invalid amount.');
+        }
+
+        // Convert to cents
+        $amount_cents = intval($amount * 100);
+
+        // Retrieve secret key from WP options
+        $secret_key = get_option('flw_stripe_secret_key', '');
+        if (!$secret_key) {
+            wp_send_json_error('Stripe secret key not found.');
+        }
+
+        // Create PaymentIntent via Stripe API
+        $ch = curl_init('https://api.stripe.com/v1/payment_intents');
+        $data = [
+            'amount'               => $amount_cents,
+            'currency'             => 'usd',
+            'payment_method_types' => ['card'],
+            'description'          => 'SSM Cart Payment',
+        ];
+        curl_setopt($ch, CURLOPT_USERPWD, $secret_key . ':');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $response = curl_exec($ch);
+        $error    = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            wp_send_json_error('cURL error: ' . $error);
+        }
+
+        $result = json_decode($response, true);
+        if (isset($result['error'])) {
+            wp_send_json_error('Stripe error: ' . $result['error']['message']);
+        }
+
+        // PaymentIntent created successfully
+        // Return its client_secret so we can confirm on the front end
+        if (isset($result['client_secret'])) {
+            wp_send_json_success([
+                'client_secret' => $result['client_secret']
+            ]);
+        } else {
+            wp_send_json_error('No client_secret in Stripe response.');
+        }
     }
 
     /**
@@ -428,19 +485,34 @@ class SSM_Plugin {
     }
 
     /**
-     * [ssm_checkout]
+     * Shortcode to show the checkout page with a Stripe payment form.
+     * Usage: [ssm_checkout]
      */
     public function ssm_checkout_shortcode() {
-        if (empty($_SESSION['ssm_cart'])) {
+        // If cart is empty, show a message.
+        if ( empty( $_SESSION['ssm_cart'] ) ) {
             return '<p>Your cart is empty.</p>';
         }
 
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
-        $cart_items = $_SESSION['ssm_cart'];
-        $total_price = 0;
-        
-        ob_start(); ?>
+        $cart_items     = $_SESSION['ssm_cart'];
+        $total_price    = 0;
+
+        // Calculate the total price of the cart.
+        foreach ( $cart_items as $product_id => $quantity ) {
+            $product = $wpdb->get_row( $wpdb->prepare(
+                "SELECT * FROM $table_products WHERE id = %d",
+                $product_id
+            ) );
+            if ( $product ) {
+                $subtotal    = $product->price * $quantity;
+                $total_price += $subtotal;
+            }
+        }
+
+        ob_start();
+        ?>
         <div class="ssm-checkout">
             <h2>Your Cart</h2>
             <table class="ssm-cart-table" style="width:100%; border-collapse: collapse;">
@@ -453,40 +525,49 @@ class SSM_Plugin {
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($cart_items as $product_id => $quantity) :
-                    $product = $wpdb->get_row($wpdb->prepare(
-                        "SELECT * FROM $table_products WHERE id = %d",
-                        $product_id
-                    ));
-                    if (!$product) {
-                        continue;
-                    }
-                    $subtotal = $product->price * $quantity;
-                    $total_price += $subtotal; ?>
-                    <tr data-product-id="<?php echo esc_attr($product->id); ?>">
-                        <td style="padding:8px;"><?php echo esc_html($product->name); ?></td>
-                        <td style="padding:8px; text-align:center;">
-                            <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr($product->id); ?>">-</button>
-                            <input type="text" value="<?php echo intval($quantity); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr($product->id); ?>" style="width:40px; text-align:center;" />
-                            <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr($product->id); ?>">+</button>
-                        </td>
-                        <td style="padding:8px; text-align:right;">$<?php echo number_format($product->price, 2); ?></td>
-                        <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format($subtotal, 2); ?></td>
-                    </tr>
-                <?php endforeach; ?>
+                    <?php
+                    // Output each cart item row.
+                    foreach ( $cart_items as $product_id => $quantity ) :
+                        $product = $wpdb->get_row( $wpdb->prepare(
+                            "SELECT * FROM $table_products WHERE id = %d",
+                            $product_id
+                        ) );
+                        if ( ! $product ) {
+                            continue;
+                        }
+                        $subtotal = $product->price * $quantity;
+                        ?>
+                        <tr data-product-id="<?php echo esc_attr( $product->id ); ?>">
+                            <td style="padding:8px;"><?php echo esc_html( $product->name ); ?></td>
+                            <td style="padding:8px; text-align:center;">
+                                <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr( $product->id ); ?>">-</button>
+                                <input type="text" value="<?php echo intval( $quantity ); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr( $product->id ); ?>" style="width:40px; text-align:center;" />
+                                <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr( $product->id ); ?>">+</button>
+                            </td>
+                            <td style="padding:8px; text-align:right;">$<?php echo number_format( $product->price, 2 ); ?></td>
+                            <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format( $subtotal, 2 ); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
-            <p class="ssm-total" style="font-weight:bold; padding:8px;">Total: $<?php echo number_format($total_price, 2); ?></p>
-            <button id="ssm-proceed-checkout" class="button button-primary">Proceed to Checkout</button>
+            <p class="ssm-total" style="font-weight:bold; padding:8px;">
+                Total: $<span id="ssm-total-amount"><?php echo number_format( $total_price, 2 ); ?></span>
+            </p>
+
+            <!-- Stripe Payment Form -->
+            <div id="ssm-stripe-checkout">
+                <h3>Enter Payment Details</h3>
+                <form id="ssm-stripe-form">
+                    <div id="card-element" style="margin-bottom:12px;"></div>
+                    <div id="card-errors" role="alert" style="color:red;"></div>
+                    <button type="submit" id="ssm-pay-now" class="button button-primary">Pay Now</button>
+                </form>
+            </div>
         </div>
-        <script>
-        document.getElementById('ssm-proceed-checkout').addEventListener('click', function() {
-            window.location.href = "<?php echo esc_url(site_url('/checkout-page/')); ?>";
-        });
-        </script>
         <?php
         return ob_get_clean();
     }
+
 
     /**
      * [ssm_subscription_account]
@@ -1031,6 +1112,7 @@ add_action('wp_enqueue_scripts', function() {
     wp_enqueue_script('ssm-front', plugins_url('assets/js/ssm-front.js', __FILE__), [], $version, true);
     wp_localize_script('ssm-front', 'ssm_params', [
         'ajax_url' => admin_url('admin-ajax.php'),
+        'publishableKey' => get_option('flw_stripe_public_key', ''),
     ]);
 });
 

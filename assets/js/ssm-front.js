@@ -1,4 +1,78 @@
 document.addEventListener('DOMContentLoaded', function () {
+    // Initialize Stripe with your publishable key
+    const stripePublicKey = (typeof ssm_params.publishableKey !== 'undefined') 
+        ? ssm_params.publishableKey 
+        : '';
+    let stripe, cardElement;
+    if (stripePublicKey) {
+        stripe = Stripe(stripePublicKey);
+        const elements = stripe.elements();
+        cardElement = elements.create('card');
+        cardElement.mount('#card-element');
+    }
+
+    // Handle Stripe form submission
+    const stripeForm = document.getElementById('ssm-stripe-form');
+    if (stripeForm) {
+        stripeForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            if (!stripe) {
+                alert('Stripe is not initialized. Check your public key.');
+                return;
+            }
+            // Read the total from the DOM
+            const totalEl = document.getElementById('ssm-total-amount');
+            const amount = totalEl ? parseFloat(totalEl.textContent) : 0;
+
+            // 1) Create PaymentIntent via AJAX
+            const formData = new FormData();
+            formData.append('action', 'ssm_create_payment_intent'); // <--- custom AJAX action
+            formData.append('amount', amount);
+
+            fetch(ssm_params.ajax_url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(json => {
+                if (!json.success) {
+                    throw new Error(json.data || 'Error creating PaymentIntent.');
+                }
+                // 2) Confirm the payment on the front end
+                const clientSecret = json.data.client_secret;
+                return stripe.confirmCardPayment(clientSecret, {
+                    payment_method: {
+                        card: cardElement,
+                    }
+                });
+            })
+            .then(result => {
+                if (result.error) {
+                    // Show error to your customer (e.g., insufficient funds)
+                    console.error('Payment error:', result.error.message);
+                    const errorDiv = document.getElementById('card-errors');
+                    if (errorDiv) {
+                        errorDiv.textContent = result.error.message;
+                    }
+                } else {
+                    // Payment succeeded
+                    if (result.paymentIntent && result.paymentIntent.status === 'succeeded') {
+                        alert('Payment successful! Thank you.');
+                        // Optionally redirect or clear cart
+                        // window.location.href = '/thank-you';
+                    }
+                }
+            })
+            .catch(err => {
+                console.error('Stripe payment error:', err);
+                const errorDiv = document.getElementById('card-errors');
+                if (errorDiv) {
+                    errorDiv.textContent = err.message;
+                }
+            });
+        });
+    }
     // --- Add to Cart functionality ---
     const addToCartButtons = document.querySelectorAll('.ssm-add-to-cart-btn');
     addToCartButtons.forEach(function (button) {

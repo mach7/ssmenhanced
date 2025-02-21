@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // Handle Stripe form submission if present
+    // Handle Stripe form submission
     const stripeForm = document.getElementById('ssm-stripe-form');
     if (stripeForm) {
         stripeForm.addEventListener('submit', function (event) {
@@ -23,13 +23,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Stripe is not initialized. Check your public key.');
                 return;
             }
-            // Read the total amount from the DOM
+            // Get the total amount from the DOM
             const totalEl = document.getElementById('ssm-total-amount');
             const amount = totalEl ? parseFloat(totalEl.textContent) : 0;
-            // Create PaymentIntent via AJAX
+            // Prepare form data for creating PaymentIntent
             const formData = new FormData();
             formData.append('action', 'ssm_create_payment_intent');
             formData.append('amount', amount);
+            // If customer info fields are present, append them
+            const nameInput = document.getElementById('ssm-customer-name');
+            const emailInput = document.getElementById('ssm-customer-email');
+            if (nameInput && emailInput) {
+                formData.append('ssm_customer_name', nameInput.value);
+                formData.append('ssm_customer_email', emailInput.value);
+            }
             fetch(ssm_params.ajax_url, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -57,7 +64,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 } else {
                     if (result.paymentIntent && result.paymentIntent.status === 'succeeded') {
                         alert('Payment successful! Thank you.');
-                        // Optionally, redirect to a thank-you page or clear the cart.
+                        // Optionally redirect or clear the cart here.
                     }
                 }
             })
@@ -71,7 +78,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // --- Existing Add to Cart functionality ---
+    // --- Add to Cart Functionality ---
     const addToCartButtons = document.querySelectorAll('.ssm-add-to-cart-btn');
     addToCartButtons.forEach(function (button) {
         button.addEventListener('click', function (event) {
@@ -109,7 +116,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     }
                 } else {
-                    const errorMsg = (json.data) ? json.data : 'An unexpected error occurred.';
+                    const errorMsg = json.data ? json.data : 'An unexpected error occurred.';
                     console.error('Error adding product to cart:', errorMsg);
                     button.textContent = 'Error';
                     alert('Error: ' + errorMsg);
@@ -135,7 +142,6 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('action', 'ssm_update_cart_quantity');
         formData.append('product_id', productId);
         formData.append('quantity', newQuantity);
-
         fetch(ssm_params.ajax_url, {
             method: 'POST',
             credentials: 'same-origin',
@@ -156,7 +162,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     totalDisplay.textContent = 'Total: $' + parseFloat(result.total_price).toFixed(2);
                 }
             } else {
-                const errorMsg = (json.data) ? json.data : 'Failed to update quantity.';
+                const errorMsg = json.data ? json.data : 'Failed to update quantity.';
                 console.error('Error updating quantity:', errorMsg);
                 alert('Error: ' + errorMsg);
             }
@@ -166,8 +172,6 @@ document.addEventListener('DOMContentLoaded', function () {
             alert('A network error occurred. Please try again.');
         });
     }
-
-    // Plus buttons
     const plusButtons = document.querySelectorAll('.ssm-qty-plus');
     plusButtons.forEach(function(button) {
         button.addEventListener('click', function() {
@@ -179,8 +183,6 @@ document.addEventListener('DOMContentLoaded', function () {
             updateQuantity(productId, currentQty, qtyInput);
         });
     });
-
-    // Minus buttons
     const minusButtons = document.querySelectorAll('.ssm-qty-minus');
     minusButtons.forEach(function(button) {
         button.addEventListener('click', function() {
@@ -194,8 +196,6 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
     });
-
-    // Manual changes to quantity input
     const qtyInputs = document.querySelectorAll('.ssm-qty-input');
     qtyInputs.forEach(function(input) {
         input.addEventListener('change', function() {

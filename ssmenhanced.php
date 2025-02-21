@@ -1,14 +1,14 @@
 <?php
 /*
 Plugin Name: Subscription Service Manager Enhanced
-Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, and checkout functionality.
-Version: 1.5.5
+Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, checkout functionality, and account creation on checkout.
+Version: 1.6
 Author: Tyson Brooks
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
 */
 
-// Prevent direct access to this file
+// Prevent direct access
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -22,19 +22,12 @@ add_action('init', function() {
 
 // Ensure the FLW Plugin Library is loaded before running the plugin
 add_action('plugins_loaded', function () {
-
-    // Check if the FLW Plugin Library is active
     if (class_exists('FLW_Plugin_Update_Checker')) {
-        $pluginSlug = basename(dirname(__FILE__)); // Dynamically get the plugin slug
-
-        // Initialize the update checker
+        $pluginSlug = basename(dirname(__FILE__));
         FLW_Plugin_Update_Checker::initialize(__FILE__, $pluginSlug);
-
-        // Replace the update icon
         add_filter('site_transient_update_plugins', function ($transient) {
             if (isset($transient->response)) {
                 foreach ($transient->response as $plugin_slug => $plugin_data) {
-                    // Use the plugin's main file path to determine its asset URL
                     if ($plugin_slug === plugin_basename(__FILE__)) {
                         $icon_url = plugins_url('assets/logo-128x128.png', __FILE__);
                         $transient->response[$plugin_slug]->icons = [
@@ -48,11 +41,9 @@ add_action('plugins_loaded', function () {
             return $transient;
         });
     } else {
-        // Admin notice for missing library
         add_action('admin_notices', function () {
             $pluginSlug = 'flwpluginlibrary/flwpluginlibrary.php';
             $plugins = get_plugins();
-
             if (!isset($plugins[$pluginSlug])) {
                 echo '<div class="notice notice-error"><p>The FLW Plugin Library is not installed. Please install and activate it to enable update functionality.</p></div>';
             } elseif (!is_plugin_active($pluginSlug)) {
@@ -64,52 +55,32 @@ add_action('plugins_loaded', function () {
             }
         });
     }
-
-    // Check if the FLW Plugin Library is available
     if ( class_exists('FLW_Plugin_Library') && !( defined('FLW_PLUGIN_LIBRARY_DISABLED') && FLW_PLUGIN_LIBRARY_DISABLED ) ) {
         class SSM_Plugin_Settings {
-            /**
-             * Constructor to initialize the plugin.
-             */
             public function __construct() {
                 add_action('admin_menu', [$this, 'register_submenu']);
             }
-
-            /**
-             * Register the submenu under the FLW Plugins menu.
-             */
             public function register_submenu() {
                 FLW_Plugin_Library::add_submenu(
-                    'SSM Manager Settings', // Title
-                    'ssm-manager', // Slug
-                    [$this, 'render_settings_page'] // Callback function
+                    'SSM Manager Settings',
+                    'ssm-manager',
+                    [$this, 'render_settings_page']
                 );
             }
-
-            /**
-             * Render the settings page content.
-             */
             public function render_settings_page() {
-                echo '<div class="wrap">';
-                echo '<h1>SSM Manager Settings</h1>';
+                echo '<div class="wrap"><h1>SSM Manager Settings</h1>';
                 echo '<form method="post" action="options.php">';
-                // Settings fields and save button would go here
                 echo '<p>Here you can manage settings for Subscription Service Manager Enhanced.</p>';
-                echo '</form>';
-                echo '</div>';
+                echo '</form></div>';
             }
         }
-        // Initialize the settings page integration
         new SSM_Plugin_Settings();
     } else {
-        // Show an admin notice if the FLW Plugin Library is not active
         add_action('admin_notices', function () {
             echo '<div class="notice notice-error"><p>The FLW Plugin Library must be activated for Subscription Service Manager Enhanced to work.</p></div>';
         });
     }
 });
-
-// Block front-end content if the FLW Plugin Library is disabled.
 if ( defined('FLW_PLUGIN_LIBRARY_DISABLED') && FLW_PLUGIN_LIBRARY_DISABLED ) {
     return '<p style="color:red;">My Google Reviews is disabled because the FLW Plugin Library API key is invalid or expired. Please update the API key in Global Settings.</p>';
 }
@@ -124,46 +95,13 @@ class SSM_Plugin {
     const CATEGORY_TABLE        = 'ssm_product_categories';
     const PRODUCT_CAT_REL_TABLE = 'ssm_product_category';
 
-    public function __construct() {
-        // Activation hook
-        register_activation_hook( __FILE__, [ $this, 'activate' ] );
-    
-        // Cron job scheduling for renewal reminders
-        add_action( 'ssm_daily_cron', [ $this, 'send_renewal_reminders' ] );
-        if ( ! wp_next_scheduled( 'ssm_daily_cron' ) ) {
-            wp_schedule_event( time(), 'daily', 'ssm_daily_cron' );
-        }
-    
-        // Check for Stripe webhook calls (via query parameter)
-        add_action( 'init', [ $this, 'maybe_handle_stripe_webhook' ] );
-    
-        // Register shortcodes
-        add_shortcode( 'ssm_add_to_cart', [ $this, 'ssm_add_to_cart_shortcode' ] );
-        add_shortcode( 'ssm_subscription_account', [ $this, 'ssm_subscription_account_shortcode' ] );
-        add_shortcode( 'ssm_checkout', [ $this, 'ssm_checkout_shortcode' ] );
-    
-        // Add admin menus
-        add_action( 'admin_menu', [ $this, 'register_admin_menus' ] );
-    
-        // Register AJAX handlers
-        add_action( 'wp_ajax_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
-        add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
-        add_action( 'wp_ajax_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
-        add_action( 'wp_ajax_nopriv_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
-        add_action('wp_ajax_ssm_create_payment_intent', [$this, 'ajax_create_payment_intent']);
-        add_action('wp_ajax_nopriv_ssm_create_payment_intent', [$this, 'ajax_create_payment_intent']);
-
-    }
-    
-    /**
-     * Plugin activation: create necessary tables.
-     */
+    // Modify table creation to include subscription_user_role.
     public function activate() {
         global $wpdb;
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         $charset_collate = $wpdb->get_charset_collate();
 
-        // Products table
+        // Products table with new subscription_user_role column.
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
         $sql1 = "CREATE TABLE $table_products (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
@@ -174,11 +112,12 @@ class SSM_Plugin {
             subscription tinyint(1) NOT NULL DEFAULT 0,
             subscription_interval varchar(20) DEFAULT 'monthly',
             subscription_price decimal(10,2) DEFAULT 0,
-            PRIMARY KEY  (id)
+            subscription_user_role varchar(50) DEFAULT '',
+            PRIMARY KEY (id)
         ) $charset_collate;";
         dbDelta( $sql1 );
 
-        // Categories table
+        // Categories table.
         $table_categories = $wpdb->prefix . self::CATEGORY_TABLE;
         $sql2 = "CREATE TABLE $table_categories (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
@@ -187,7 +126,7 @@ class SSM_Plugin {
         ) $charset_collate;";
         dbDelta( $sql2 );
 
-        // Relationship table for products and categories (many-to-many)
+        // Relationship table.
         $table_rel = $wpdb->prefix . self::PRODUCT_CAT_REL_TABLE;
         $sql3 = "CREATE TABLE $table_rel (
             product_id mediumint(9) NOT NULL,
@@ -196,54 +135,121 @@ class SSM_Plugin {
         ) $charset_collate;";
         dbDelta( $sql3 );
     }
-    
-    /**
-     * AJAX handler for adding a product to the cart.
-     */
-    public function ajax_add_to_cart() {
-        $product_id = isset( $_POST['product_id'] ) ? intval( $_POST['product_id'] ) : 0;
-        if ( ! $product_id ) {
-            wp_send_json_error( 'Invalid product.' );
-        }
 
-        // Ensure cart array
-        if ( ! isset( $_SESSION['ssm_cart'] ) ) {
+    public function __construct() {
+        register_activation_hook( __FILE__, [ $this, 'activate' ] );
+        add_action( 'ssm_daily_cron', [ $this, 'send_renewal_reminders' ] );
+        if ( ! wp_next_scheduled( 'ssm_daily_cron' ) ) {
+            wp_schedule_event( time(), 'daily', 'ssm_daily_cron' );
+        }
+        add_action( 'init', [ $this, 'maybe_handle_stripe_webhook' ] );
+        add_shortcode( 'ssm_add_to_cart', [ $this, 'ssm_add_to_cart_shortcode' ] );
+        add_shortcode( 'ssm_subscription_account', [ $this, 'ssm_subscription_account_shortcode' ] );
+        add_shortcode( 'ssm_checkout', [ $this, 'ssm_checkout_shortcode' ] );
+        add_action( 'admin_menu', [ $this, 'register_admin_menus' ] );
+        add_action( 'wp_ajax_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
+        add_action( 'wp_ajax_nopriv_ssm_add_to_cart', [ $this, 'ajax_add_to_cart' ] );
+        add_action( 'wp_ajax_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
+        add_action( 'wp_ajax_nopriv_ssm_update_cart_quantity', [ $this, 'ajax_update_cart_quantity' ] );
+        add_action('wp_ajax_ssm_create_payment_intent', [$this, 'ajax_create_payment_intent']);
+        add_action('wp_ajax_nopriv_ssm_create_payment_intent', [$this, 'ajax_create_payment_intent']);
+    }
+
+    public function ajax_add_to_cart() {
+        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+        if ( ! $product_id ) {
+            wp_send_json_error('Invalid product.');
+        }
+        if ( ! isset($_SESSION['ssm_cart']) ) {
             $_SESSION['ssm_cart'] = [];
         }
-
-        // Add/increment
-        if ( ! isset( $_SESSION['ssm_cart'][ $product_id ] ) ) {
-            $_SESSION['ssm_cart'][ $product_id ] = 1;
+        if ( ! isset($_SESSION['ssm_cart'][$product_id]) ) {
+            $_SESSION['ssm_cart'][$product_id] = 1;
         } else {
-            $_SESSION['ssm_cart'][ $product_id ]++;
+            $_SESSION['ssm_cart'][$product_id]++;
         }
+        $cart_total = array_sum($_SESSION['ssm_cart']);
+        wp_send_json_success(['cart_total' => $cart_total]);
+    }
 
-        // Sum of all quantities
-        $cart_total = array_sum( $_SESSION['ssm_cart'] );
+    public function ajax_update_cart_quantity() {
+        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
+        $quantity   = isset($_POST['quantity']) ? intval($_POST['quantity']) : 1;
+        if ( !$product_id ) {
+            wp_send_json_error('Invalid product.');
+        }
+        $_SESSION['ssm_cart'][$product_id] = $quantity;
+        global $wpdb;
+        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+        $product = $wpdb->get_row($wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $product_id));
+        $product_subtotal = ($product) ? $product->price * $quantity : 0;
+        $total_price = 0;
+        foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
+            $p = $wpdb->get_row($wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $pid));
+            if ($p) {
+                $total_price += $p->price * $qty;
+            }
+        }
         wp_send_json_success([
-            'cart_total' => $cart_total
+            'product_subtotal' => $product_subtotal,
+            'total_price'      => $total_price,
         ]);
     }
-    /**
-     * AJAX handler to create a PaymentIntent for Stripe.
-     */
+
     public function ajax_create_payment_intent() {
-        // Retrieve the total from POST.
         $amount = isset($_POST['amount']) ? floatval($_POST['amount']) : 0;
         if ($amount <= 0) {
             wp_send_json_error('Invalid amount.');
         }
-
-        // Convert to cents
+        // If user is not logged in, require name and email
+        if (!is_user_logged_in()) {
+            $name  = isset($_POST['ssm_customer_name']) ? sanitize_text_field($_POST['ssm_customer_name']) : '';
+            $email = isset($_POST['ssm_customer_email']) ? sanitize_email($_POST['ssm_customer_email']) : '';
+            if (empty($name) || empty($email)) {
+                wp_send_json_error('Name and email are required for checkout.');
+            }
+            if (!email_exists($email)) {
+                $random_password = wp_generate_password(12, false);
+                $user_id = wp_create_user($email, $random_password, $email);
+                if (is_wp_error($user_id)) {
+                    wp_send_json_error('User creation failed: ' . $user_id->get_error_message());
+                }
+                wp_update_user(['ID' => $user_id, 'display_name' => $name]);
+                global $wpdb;
+                $subscription_role = 'subscriber';
+                // Check if any subscription product in cart has a defined role.
+                foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
+                    $product = $wpdb->get_row($wpdb->prepare("SELECT subscription, subscription_user_role FROM {$wpdb->prefix}" . self::PRODUCT_TABLE . " WHERE id = %d", $pid));
+                    if ($product && $product->subscription) {
+                        if (!empty($product->subscription_user_role)) {
+                            $subscription_role = $product->subscription_user_role;
+                        }
+                        break;
+                    }
+                }
+                $user = new WP_User($user_id);
+                $user->set_role($subscription_role);
+                wp_set_current_user($user_id);
+                wp_set_auth_cookie($user_id);
+            } else {
+                $user = get_user_by('email', $email);
+                wp_set_current_user($user->ID);
+                wp_set_auth_cookie($user->ID);
+            }
+        }
+        // At this point, we have a logged-in user.
+        $user_id = get_current_user_id();
         $amount_cents = intval($amount * 100);
-
-        // Retrieve secret key from WP options
         $secret_key = get_option('flw_stripe_secret_key', '');
         if (!$secret_key) {
             wp_send_json_error('Stripe secret key not found.');
         }
-
-        // Create PaymentIntent via Stripe API
+        $current_user = wp_get_current_user();
+        $metadata = [
+            'user_id'        => $user_id,
+            'customer_name'  => $current_user->display_name,
+            'customer_email' => $current_user->user_email,
+        ];
         $ch = curl_init('https://api.stripe.com/v1/payment_intents');
         $data = [
             'amount'               => $amount_cents,
@@ -251,98 +257,43 @@ class SSM_Plugin {
             'payment_method_types' => ['card'],
             'description'          => 'SSM Cart Payment',
         ];
+        foreach ($metadata as $key => $value) {
+            $data["metadata[$key]"] = $value;
+        }
         curl_setopt($ch, CURLOPT_USERPWD, $secret_key . ':');
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         $response = curl_exec($ch);
-        $error    = curl_error($ch);
+        $error = curl_error($ch);
         curl_close($ch);
-
         if ($error) {
             wp_send_json_error('cURL error: ' . $error);
         }
-
         $result = json_decode($response, true);
         if (isset($result['error'])) {
             wp_send_json_error('Stripe error: ' . $result['error']['message']);
         }
-
-        // PaymentIntent created successfully
-        // Return its client_secret so we can confirm on the front end
         if (isset($result['client_secret'])) {
-            wp_send_json_success([
-                'client_secret' => $result['client_secret']
-            ]);
+            wp_send_json_success(['client_secret' => $result['client_secret']]);
         } else {
             wp_send_json_error('No client_secret in Stripe response.');
         }
     }
 
-    /**
-     * AJAX handler to update quantity in the cart.
-     */
-    public function ajax_update_cart_quantity() {
-        $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
-        $quantity   = isset($_POST['quantity']) ? intval($_POST['quantity']) : 1;
-
-        if ( !$product_id ) {
-            wp_send_json_error('Invalid product.');
-        }
-
-        // Update the session cart
-        $_SESSION['ssm_cart'][$product_id] = $quantity;
-
-        global $wpdb;
-        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
-
-        // Calculate the updated product subtotal
-        $product = $wpdb->get_row(
-            $wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $product_id)
-        );
-        $product_subtotal = 0;
-        if ($product) {
-            $product_subtotal = $product->price * $quantity;
-        }
-
-        // Recalculate overall total
-        $total_price = 0;
-        foreach ($_SESSION['ssm_cart'] as $pid => $qty) {
-            $p = $wpdb->get_row(
-                $wpdb->prepare("SELECT price FROM $table_products WHERE id = %d", $pid)
-            );
-            if ($p) {
-                $total_price += $p->price * $qty;
-            }
-        }
-
-        wp_send_json_success([
-            'product_subtotal' => $product_subtotal,
-            'total_price'      => $total_price,
-        ]);
-    }
-
-    /**
-     * Possibly handle a Stripe webhook request
-     */
     public function maybe_handle_stripe_webhook() {
-        if ( isset( $_GET['ssm_webhook'] ) && $_GET['ssm_webhook'] === 'stripe' ) {
+        if ( isset($_GET['ssm_webhook']) && $_GET['ssm_webhook'] === 'stripe' ) {
             $this->handle_stripe_webhook();
         }
     }
 
-    /**
-     * Handle Stripe events
-     */
     public function handle_stripe_webhook() {
         $payload = @file_get_contents('php://input');
         $event   = json_decode($payload, true);
-
         if ( json_last_error() !== JSON_ERROR_NONE ) {
             http_response_code(400);
             exit();
         }
-
         if ( isset($event['type']) ) {
             switch ( $event['type'] ) {
                 case 'checkout.session.completed':
@@ -353,7 +304,6 @@ class SSM_Plugin {
                         $this->process_successful_subscription($user_id, $product_id);
                     }
                     break;
-
                 case 'customer.subscription.deleted':
                 case 'invoice.payment_failed':
                     $user_id = isset($event['data']['object']['metadata']['user_id']) ? intval($event['data']['object']['metadata']['user_id']) : 0;
@@ -361,7 +311,6 @@ class SSM_Plugin {
                         $this->expire_api_key($user_id);
                     }
                     break;
-
                 default:
                     error_log('[SSM] Unhandled Stripe event: ' . $event['type']);
                     break;
@@ -371,9 +320,6 @@ class SSM_Plugin {
         exit();
     }
 
-    /**
-     * On successful subscription, create or update API key
-     */
     public function process_successful_subscription($user_id, $product_id) {
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
@@ -385,18 +331,14 @@ class SSM_Plugin {
             error_log('[SSM] Product not found for subscription.');
             return;
         }
-
-        // Decide on expiration date
         $expiration_date = current_time('mysql');
         if ($product->subscription_interval === 'yearly') {
             $expiration_date = date('Y-m-d H:i:s', strtotime('+1 year'));
         } else {
             $expiration_date = date('Y-m-d H:i:s', strtotime('+1 month'));
         }
-
         $existing_key = get_user_meta($user_id, 'ssm_api_key', true);
         if (!$existing_key) {
-            // Create new
             $response = wp_remote_post(home_url('/wp-json/akm/v1/key'), [
                 'body' => [
                     'email'    => get_userdata($user_id)->user_email,
@@ -414,7 +356,6 @@ class SSM_Plugin {
                 }
             }
         } else {
-            // Update existing
             $response = wp_remote_post(home_url('/wp-json/akm/v1/key/' . $user_id), [
                 'method' => 'PUT',
                 'body'   => [
@@ -431,9 +372,6 @@ class SSM_Plugin {
         }
     }
 
-    /**
-     * Expire the user's API key
-     */
     public function expire_api_key($user_id) {
         $existing_key = get_user_meta($user_id, 'ssm_api_key', true);
         if ($existing_key) {
@@ -448,14 +386,10 @@ class SSM_Plugin {
         }
     }
 
-    /**
-     * [ssm_add_to_cart product_id="123"]
-     */
     public function ssm_add_to_cart_shortcode($atts) {
         $atts = shortcode_atts([
             'product_id' => 0,
         ], $atts, 'ssm_add_to_cart');
-
         $product_id = intval($atts['product_id']);
         if (!$product_id) {
             return 'Invalid product.';
@@ -469,7 +403,6 @@ class SSM_Plugin {
         if (!$product) {
             return 'Product not found.';
         }
-
         ob_start(); ?>
         <div class="ssm-product" data-product-id="<?php echo esc_attr($product->id); ?>" data-price="<?php echo esc_attr($product->price); ?>">
             <h3><?php echo esc_html($product->name); ?></h3>
@@ -484,33 +417,24 @@ class SSM_Plugin {
         return ob_get_clean();
     }
 
-    /**
-     * Shortcode to show the checkout page with a Stripe payment form.
-     * Usage: [ssm_checkout]
-     */
     public function ssm_checkout_shortcode() {
-        // If cart is empty, show a message.
-        if ( empty( $_SESSION['ssm_cart'] ) ) {
+        if ( empty($_SESSION['ssm_cart']) ) {
             return '<p>Your cart is empty.</p>';
         }
-
         global $wpdb;
         $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
         $cart_items     = $_SESSION['ssm_cart'];
         $total_price    = 0;
-
-        // Calculate the total price of the cart.
-        foreach ( $cart_items as $product_id => $quantity ) {
-            $product = $wpdb->get_row( $wpdb->prepare(
+        foreach ($cart_items as $product_id => $quantity) {
+            $product = $wpdb->get_row($wpdb->prepare(
                 "SELECT * FROM $table_products WHERE id = %d",
                 $product_id
-            ) );
-            if ( $product ) {
+            ));
+            if ($product) {
                 $subtotal    = $product->price * $quantity;
                 $total_price += $subtotal;
             }
         }
-
         ob_start();
         ?>
         <div class="ssm-checkout">
@@ -525,35 +449,40 @@ class SSM_Plugin {
                     </tr>
                 </thead>
                 <tbody>
-                    <?php
-                    // Output each cart item row.
-                    foreach ( $cart_items as $product_id => $quantity ) :
-                        $product = $wpdb->get_row( $wpdb->prepare(
+                    <?php foreach ($cart_items as $product_id => $quantity) :
+                        $product = $wpdb->get_row($wpdb->prepare(
                             "SELECT * FROM $table_products WHERE id = %d",
                             $product_id
-                        ) );
-                        if ( ! $product ) {
+                        ));
+                        if (!$product) {
                             continue;
                         }
                         $subtotal = $product->price * $quantity;
                         ?>
-                        <tr data-product-id="<?php echo esc_attr( $product->id ); ?>">
-                            <td style="padding:8px;"><?php echo esc_html( $product->name ); ?></td>
+                        <tr data-product-id="<?php echo esc_attr($product->id); ?>">
+                            <td style="padding:8px;"><?php echo esc_html($product->name); ?></td>
                             <td style="padding:8px; text-align:center;">
-                                <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr( $product->id ); ?>">-</button>
-                                <input type="text" value="<?php echo intval( $quantity ); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr( $product->id ); ?>" style="width:40px; text-align:center;" />
-                                <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr( $product->id ); ?>">+</button>
+                                <button class="ssm-qty-minus" data-product-id="<?php echo esc_attr($product->id); ?>">-</button>
+                                <input type="text" value="<?php echo intval($quantity); ?>" class="ssm-qty-input" data-product-id="<?php echo esc_attr($product->id); ?>" style="width:40px; text-align:center;" />
+                                <button class="ssm-qty-plus" data-product-id="<?php echo esc_attr($product->id); ?>">+</button>
                             </td>
-                            <td style="padding:8px; text-align:right;">$<?php echo number_format( $product->price, 2 ); ?></td>
-                            <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format( $subtotal, 2 ); ?></td>
+                            <td style="padding:8px; text-align:right;">$<?php echo number_format($product->price, 2); ?></td>
+                            <td class="ssm-subtotal" style="padding:8px; text-align:right;">$<?php echo number_format($subtotal, 2); ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
             <p class="ssm-total" style="font-weight:bold; padding:8px;">
-                Total: $<span id="ssm-total-amount"><?php echo number_format( $total_price, 2 ); ?></span>
+                Total: $<span id="ssm-total-amount"><?php echo number_format($total_price, 2); ?></span>
             </p>
-
+            <?php if (!is_user_logged_in()): ?>
+                <div id="ssm-customer-info">
+                    <label for="ssm-customer-name">Name:</label>
+                    <input type="text" id="ssm-customer-name" name="ssm_customer_name" required>
+                    <label for="ssm-customer-email">Email:</label>
+                    <input type="email" id="ssm-customer-email" name="ssm_customer_email" required>
+                </div>
+            <?php endif; ?>
             <!-- Stripe Payment Form -->
             <div id="ssm-stripe-checkout">
                 <h3>Enter Payment Details</h3>
@@ -568,10 +497,6 @@ class SSM_Plugin {
         return ob_get_clean();
     }
 
-
-    /**
-     * [ssm_subscription_account]
-     */
     public function ssm_subscription_account_shortcode() {
         ob_start(); ?>
         <div class="ssm-subscription-account">
@@ -595,9 +520,6 @@ class SSM_Plugin {
         return ob_get_clean();
     }
 
-    /**
-     * Register admin menus
-     */
     public function register_admin_menus() {
         add_menu_page('SSM Manager', 'SSM Manager', 'manage_options', 'ssm_manager', [$this, 'render_products_page'], 'dashicons-cart', 58);
         add_submenu_page('ssm_manager', 'Products', 'Products', 'manage_options', 'ssm_products', [$this, 'render_products_page']);

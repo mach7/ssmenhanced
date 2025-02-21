@@ -1104,6 +1104,7 @@ if ( file_exists( $log_file ) ) {
 
 // Enqueue front-end script with plugin version
 add_action('wp_enqueue_scripts', function() {
+    wp_enqueue_script('stripe-js', 'https://js.stripe.com/v3/', [], null, true);
     if (!function_exists('get_plugin_data')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }

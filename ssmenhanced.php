@@ -78,7 +78,7 @@ function ssm_plugins_loaded() {
 		}
 	}
 
-	if ( class_exists( 'FLW_Plugin_Library' ) && !( defined( 'FLW_PLUGIN_LIBRARY_DISABLED' ) && FLW_PLUGIN_LIBRARY_DISABLED ) ) {
+	if ( class_exists( 'FLW_Plugin_Library' )) {
 		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
 			// Initialize plugin settings submenu via FLW_Plugin_Library.
 			// We define a class for settings.
@@ -101,10 +101,6 @@ function ssm_plugins_loaded() {
 				}
 			}
 			new SSM_Plugin_Settings();
-		}
-	} else {
-		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-			add_action( 'admin_notices', 'ssm_admin_notice_flw_library_required' );
 		}
 	}
 }

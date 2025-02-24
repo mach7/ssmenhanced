@@ -107,14 +107,6 @@ function ssm_plugins_loaded() {
 			add_action( 'admin_notices', 'ssm_admin_notice_flw_library_required' );
 		}
 	}
-
-	// Avoid outputting HTML in AJAX requests
-	if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-		if ( defined( 'FLW_PLUGIN_LIBRARY_DISABLED' ) && FLW_PLUGIN_LIBRARY_DISABLED ) {
-			echo '<p style="color:red;">My Google Reviews is disabled because the FLW Plugin Library API key is invalid or expired. Please update the API key in Global Settings.</p>';
-			return;
-		}
-	}
 }
 add_action( 'plugins_loaded', 'ssm_plugins_loaded' );
 

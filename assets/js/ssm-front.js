@@ -1,14 +1,14 @@
 document.addEventListener('DOMContentLoaded', function () {
     // --- Initialize Stripe Payment Form ---
     const cardElementContainer = document.getElementById('card-element');
-    let stripe, cardElement;
+    let stripe, elements, cardElement;
     if (cardElementContainer) {
         const stripePublicKey = (typeof ssm_params.publishableKey !== 'undefined')
             ? ssm_params.publishableKey
             : '';
         if (stripePublicKey) {
             stripe = Stripe(stripePublicKey);
-            const elements = stripe.elements();
+            elements = stripe.elements();
             cardElement = elements.create('card');
             cardElement.mount(cardElementContainer);
         }
@@ -31,6 +31,26 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!amount || amount <= 0) {
                 alert("Invalid amount calculated: " + amount);
                 return;
+            }
+            // Ensure the card Element is mounted (guard against DOM changes)
+            const container = document.getElementById('card-element');
+            if (!stripe || !elements) {
+                alert('Stripe is not initialized. Check your public key.');
+                return;
+            }
+            if (!container) {
+                alert('Payment field is not available. Please reload the page.');
+                return;
+            }
+            if (!cardElement || container.childElementCount === 0) {
+                try {
+                    cardElement = elements.create('card');
+                    cardElement.mount(container);
+                } catch (e) {
+                    console.error('Failed to mount card element on submit:', e);
+                    alert('Payment field could not be initialized. Please reload the page.');
+                    return;
+                }
             }
             const formData = new FormData();
             formData.append('action', 'ssm_create_payment_intent');
@@ -178,9 +198,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (subtotalCell && typeof result.product_subtotal !== 'undefined') {
                     subtotalCell.textContent = '$' + parseFloat(result.product_subtotal).toFixed(2);
                 }
-                const totalDisplay = document.querySelector('.ssm-total');
-                if (totalDisplay && typeof result.total_price !== 'undefined') {
-                    totalDisplay.textContent = 'Total: $' + parseFloat(result.total_price).toFixed(2);
+                const totalSpan = document.getElementById('ssm-total-amount');
+                if (totalSpan && typeof result.total_price !== 'undefined') {
+                    totalSpan.textContent = parseFloat(result.total_price).toFixed(2);
                 }
             } else {
                 const errorMsg = json.data ? json.data : 'Failed to update quantity.';

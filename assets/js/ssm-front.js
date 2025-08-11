@@ -23,6 +23,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Stripe is not initialized. Check your public key.');
                 return;
             }
+            const payBtn = document.getElementById('ssm-pay-now');
+            if (payBtn) { payBtn.disabled = true; }
             const totalEl = document.getElementById('ssm-total-amount');
             // Remove any non-numeric characters (like $ or whitespace)
             const rawAmount = totalEl ? totalEl.textContent : '';
@@ -32,25 +34,26 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert("Invalid amount calculated: " + amount);
                 return;
             }
-            // Ensure the card Element is mounted (guard against DOM changes)
+            // Ensure we have the currently mounted Card Element, remount if needed
             const container = document.getElementById('card-element');
-            if (!stripe || !elements) {
-                alert('Stripe is not initialized. Check your public key.');
-                return;
-            }
-            if (!container) {
-                alert('Payment field is not available. Please reload the page.');
-                return;
-            }
-            if (!cardElement || container.childElementCount === 0) {
+            if (!elements) { elements = stripe.elements(); }
+            let mountedCard = elements.getElement('card');
+            if (!mountedCard) {
+                if (!container) {
+                    alert('Payment field is not available. Please reload the page.');
+                    if (payBtn) { payBtn.disabled = false; }
+                    return;
+                }
                 try {
-                    cardElement = elements.create('card');
-                    cardElement.mount(container);
+                    mountedCard = elements.create('card');
+                    mountedCard.mount(container);
                 } catch (e) {
                     console.error('Failed to mount card element on submit:', e);
                     alert('Payment field could not be initialized. Please reload the page.');
+                    if (payBtn) { payBtn.disabled = false; }
                     return;
                 }
+                cardElement = mountedCard;
             }
             const formData = new FormData();
             formData.append('action', 'ssm_create_payment_intent');
@@ -72,9 +75,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     throw new Error(json.data || 'Error creating PaymentIntent.');
                 }
                 const clientSecret = json.data.client_secret;
+                // Fetch the live card element again in case of async DOM changes
+                const liveCard = (elements && elements.getElement('card')) ? elements.getElement('card') : cardElement;
                 return stripe.confirmCardPayment(clientSecret, {
                     payment_method: {
-                        card: cardElement,
+                        card: liveCard,
                     }
                 });
             })
@@ -115,6 +120,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (errorDiv) {
                     errorDiv.textContent = err.message;
                 }
+            })
+            .finally(() => {
+                if (payBtn) { payBtn.disabled = false; }
             });
         });
     }

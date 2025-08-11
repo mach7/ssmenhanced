@@ -1,17 +1,60 @@
 document.addEventListener('DOMContentLoaded', function () {
     // --- Initialize Stripe Payment Form ---
     const cardElementContainer = document.getElementById('card-element');
-    let stripe, elements, cardElement;
-    if (cardElementContainer) {
+    let stripe, elements, cardElement, cardMountNode;
+    function initStripe() {
         const stripePublicKey = (typeof ssm_params.publishableKey !== 'undefined')
             ? ssm_params.publishableKey
             : '';
-        if (stripePublicKey) {
+        if (!stripePublicKey) return false;
+        if (!stripe) {
             stripe = Stripe(stripePublicKey);
-            elements = stripe.elements();
-            cardElement = elements.create('card');
-            cardElement.mount(cardElementContainer);
         }
+        if (!elements) {
+            elements = stripe.elements();
+        }
+        return true;
+    }
+    function ensureCardMountNode() {
+        if (!cardElementContainer) return null;
+        // Create a dedicated, always-empty child mount node to avoid theme/plugins injecting children
+        if (!cardMountNode || !document.body.contains(cardMountNode)) {
+            // Clear any existing children to avoid Stripe warning
+            while (cardElementContainer.firstChild) {
+                cardElementContainer.removeChild(cardElementContainer.firstChild);
+            }
+            cardMountNode = document.createElement('div');
+            cardMountNode.id = 'ssm-card-mount';
+            cardElementContainer.appendChild(cardMountNode);
+        }
+        return cardMountNode;
+    }
+    function getOrCreateCardElement() {
+        if (!initStripe()) return null;
+        const mountNode = ensureCardMountNode();
+        if (!mountNode) return null;
+        // Get existing mounted element if present
+        let mounted = elements.getElement('card');
+        try {
+            if (mounted) {
+                // If mount node is empty or element isn't mounted here, re-mount
+                if (!mountNode.firstChild) {
+                    mounted.mount(mountNode);
+                }
+                cardElement = mounted;
+                return cardElement;
+            }
+            // Create and mount new element
+            cardElement = elements.create('card');
+            cardElement.mount(mountNode);
+            return cardElement;
+        } catch (e) {
+            console.error('Error ensuring Card Element mount:', e);
+            return null;
+        }
+    }
+    if (cardElementContainer) {
+        getOrCreateCardElement();
     }
 
     // Handle Stripe form submission
@@ -36,24 +79,20 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             // Ensure we have the currently mounted Card Element, remount if needed
             const container = document.getElementById('card-element');
-            if (!elements) { elements = stripe.elements(); }
-            let mountedCard = elements.getElement('card');
+            let mountedCard = getOrCreateCardElement();
             if (!mountedCard) {
                 if (!container) {
                     alert('Payment field is not available. Please reload the page.');
                     if (payBtn) { payBtn.disabled = false; }
                     return;
                 }
-                try {
-                    mountedCard = elements.create('card');
-                    mountedCard.mount(container);
-                } catch (e) {
-                    console.error('Failed to mount card element on submit:', e);
+                // Attempt one more time to create/mount
+                mountedCard = getOrCreateCardElement();
+                if (!mountedCard) {
                     alert('Payment field could not be initialized. Please reload the page.');
                     if (payBtn) { payBtn.disabled = false; }
                     return;
                 }
-                cardElement = mountedCard;
             }
             const formData = new FormData();
             formData.append('action', 'ssm_create_payment_intent');

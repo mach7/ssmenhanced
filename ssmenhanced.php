@@ -1147,6 +1147,30 @@ class SSM_Plugin {
 		<?php
 	}
 
+    // Settings page with migration tool button
+    public function render_ssm_settings_page() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Insufficient permissions.' );
+        }
+        if ( isset( $_POST['ssm_migrate_shortcodes'] ) ) {
+            check_admin_referer( 'ssm_migrate_shortcodes' );
+            $migrated = ssm_migrate_shortcodes_to_blocks();
+            echo '<div class="updated"><p>Migrated content in ' . intval( $migrated ) . ' posts.</p></div>';
+        }
+        ?>
+        <div class="wrap">
+            <h1>SSM Settings</h1>
+            <h2>Content Migration</h2>
+            <p>Convert legacy shortcodes to Gutenberg blocks across all public post types.</p>
+            <form method="post" onsubmit="return confirm('This will modify post content across your site. Continue?');">
+                <?php wp_nonce_field( 'ssm_migrate_shortcodes' ); ?>
+                <input type="hidden" name="ssm_migrate_shortcodes" value="1" />
+                <?php submit_button( 'Migrate Shortcodes to Blocks', 'primary' ); ?>
+            </form>
+        </div>
+        <?php
+    }
+
 	public function send_renewal_reminders() {
 		$users = get_users( array(
 			'meta_key'     => 'ssm_api_key_expiry',

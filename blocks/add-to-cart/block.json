@@ -1,0 +1,16 @@
+{
+  "apiVersion": 2,
+  "name": "ssm/add-to-cart",
+  "title": "SSM: Add to Cart",
+  "category": "widgets",
+  "icon": "cart",
+  "description": "Display an SSM product with Add to Cart.",
+  "attributes": {
+    "productId": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "editorScript": "file:./index.js"
+}
+

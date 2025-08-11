@@ -1,0 +1,25 @@
+Remaining work
+
+Gutenberg editor enhancements (optional)
+- Add a REST route to list products for the editor selector:
+  - `register_rest_route('ssm/v1', '/products', [ 'methods' => 'GET', 'permission_callback' => function(){ return current_user_can('edit_posts'); }, 'callback' => function(){ /* return id, name */ } ])`
+- In `blocks/add-to-cart/index.js`, replace the numeric `TextControl` with a dropdown fed by `@wordpress/api-fetch` to select a product by name/ID.
+- Optional: use `@wordpress/server-side-render` for an editor preview of the PHP output.
+
+SSM Enhanced – outstanding items
+- Include the Stripe PaymentIntent ID in webhook payloads:
+  - Accept `$payment_intent_id` in `process_successful_subscription($user_id, $product_id, $payment_intent_id = null)` and forward it to `trigger_product_webhook()` so `transaction_id` is populated.
+  - Pass the PI ID from the finalize endpoint when invoking `process_successful_subscription`.
+- Stripe Subscriptions (optional): if migrating, handle `invoice.payment_succeeded` to extend `valid_to` and emit purchase/renewal webhooks; continue to handle `invoice.payment_failed` and `customer.subscription.deleted` for cancel/expire.
+
+Content migration (optional)
+- Provide a WP‑CLI command or admin tool to convert shortcodes to blocks:
+  - `[ssm_add_to_cart product_id="(\\d+)"]` → `<!-- wp:ssm/add-to-cart {"productId":123} /-->`
+  - `[ssm_checkout]` → `<!-- wp:ssm/checkout /-->`
+  - `[ssm_subscription_account]` → `<!-- wp:ssm/subscription-account /-->`
+
+Targeted testing (for the above)
+- Add‑to‑Cart editor dropdown loads products and saves `productId`.
+- Webhook payload contains non‑empty `transaction_id` from the PaymentIntent.
+- If using Stripe Subscriptions: renewal and cancel paths update `ssm_user_subscriptions` and send appropriate webhooks.
+

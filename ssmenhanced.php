@@ -132,6 +132,9 @@ class SSM_Plugin {
 			subscription_interval varchar(20) DEFAULT 'monthly',
 			subscription_price decimal(10,2) DEFAULT 0,
 			subscription_user_role varchar(50) DEFAULT '',
+			webhook_purchase_url varchar(255) DEFAULT '',
+			webhook_cancel_url varchar(255) DEFAULT '',
+			webhook_secret varchar(255) DEFAULT '',
 			PRIMARY KEY (id)
 		) $charset_collate;";
 		dbDelta( $sql1 );
@@ -153,10 +156,27 @@ class SSM_Plugin {
 			PRIMARY KEY (product_id, category_id)
 		) $charset_collate;";
 		dbDelta( $sql3 );
+
+		// Subscriptions table.
+		$table_subs = $wpdb->prefix . 'ssm_user_subscriptions';
+		$sql4 = "CREATE TABLE $table_subs (
+		  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		  user_id bigint(20) unsigned NOT NULL,
+		  product_id mediumint(9) NOT NULL,
+		  status varchar(20) NOT NULL DEFAULT 'active',
+		  valid_to datetime NULL,
+		  created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  PRIMARY KEY (id),
+		  KEY user_product (user_id, product_id)
+		) $charset_collate;";
+		dbDelta( $sql4 );
 	}
 
-	public function __construct() {
+    public function __construct() {
 		register_activation_hook( __FILE__, array( $this, 'activate' ) );
+		add_action( 'init', array( $this, 'maybe_upgrade_schema' ) );
+		add_action( 'init', array( $this, 'register_gutenberg_blocks' ) );
+        add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		add_action( 'ssm_daily_cron', array( $this, 'send_renewal_reminders' ) );
 		if ( ! wp_next_scheduled( 'ssm_daily_cron' ) ) {
 			wp_schedule_event( time(), 'daily', 'ssm_daily_cron' );
@@ -172,6 +192,8 @@ class SSM_Plugin {
 		add_action( 'wp_ajax_nopriv_ssm_update_cart_quantity', array( $this, 'ajax_update_cart_quantity' ) );
 		add_action( 'wp_ajax_ssm_create_payment_intent', array( $this, 'ajax_create_payment_intent' ) );
 		add_action( 'wp_ajax_nopriv_ssm_create_payment_intent', array( $this, 'ajax_create_payment_intent' ) );
+		add_action( 'wp_ajax_ssm_finalize_payment', array( $this, 'ajax_finalize_payment' ) );
+		add_action( 'wp_ajax_nopriv_ssm_finalize_payment', array( $this, 'ajax_finalize_payment' ) );
 	}
 
 	public function ajax_add_to_cart() {
@@ -269,11 +291,18 @@ class SSM_Plugin {
             wp_send_json_error('Stripe secret key not found.');
         }
         $current_user = wp_get_current_user();
-        $metadata = [
+		$metadata = [
             'user_id'        => $user_id,
             'customer_name'  => $current_user->display_name,
             'customer_email' => $current_user->user_email,
         ];
+		// Include product IDs from the cart so we know what was purchased
+		$cart_product_ids = ! empty( $_SESSION['ssm_cart'] ) && is_array( $_SESSION['ssm_cart'] )
+			? implode( ',', array_map( 'intval', array_keys( $_SESSION['ssm_cart'] ) ) )
+			: '';
+		if ( $cart_product_ids ) {
+			$metadata['product_ids'] = $cart_product_ids;
+		}
         $ch = curl_init('https://api.stripe.com/v1/payment_intents');
         $data = [
             'amount'               => $amount_cents,
@@ -319,21 +348,40 @@ class SSM_Plugin {
 			http_response_code( 400 );
 			exit();
 		}
-		if ( isset( $event['type'] ) ) {
-			switch ( $event['type'] ) {
-				case 'checkout.session.completed':
+        if ( isset( $event['type'] ) ) {
+                switch ( $event['type'] ) {
+                case 'checkout.session.completed':
 					$session    = $event['data']['object'];
 					$user_id    = isset( $session['metadata']['user_id'] ) ? intval( $session['metadata']['user_id'] ) : 0;
 					$product_id = isset( $session['metadata']['product_id'] ) ? intval( $session['metadata']['product_id'] ) : 0;
-					if ( $user_id && $product_id ) {
-						$this->process_successful_subscription( $user_id, $product_id );
+                    $payment_intent_id = isset( $session['payment_intent'] ) ? $session['payment_intent'] : null;
+                    if ( $user_id && $product_id ) {
+                        $this->process_successful_subscription( $user_id, $product_id, $payment_intent_id );
 					}
-					break;
+                    break;
+                case 'invoice.payment_succeeded':
+                    $invoice = $event['data']['object'];
+                    $user_id = 0;
+                    if ( isset( $invoice['metadata']['user_id'] ) ) {
+                        $user_id = intval( $invoice['metadata']['user_id'] );
+                    }
+                    $payment_intent_id = isset( $invoice['payment_intent'] ) ? $invoice['payment_intent'] : null;
+                    $product_ids = array();
+                    if ( isset( $invoice['metadata']['product_ids'] ) && is_string( $invoice['metadata']['product_ids'] ) ) {
+                        $product_ids = array_filter( array_map( 'intval', array_map( 'trim', explode( ',', $invoice['metadata']['product_ids'] ) ) ) );
+                    } elseif ( isset( $invoice['metadata']['product_id'] ) ) {
+                        $product_ids = array( intval( $invoice['metadata']['product_id'] ) );
+                    }
+                    if ( $user_id ) {
+                        $this->handle_subscription_renewal( $user_id, $product_ids, $payment_intent_id );
+                    }
+                    break;
 				case 'customer.subscription.deleted':
 				case 'invoice.payment_failed':
 					$user_id = isset( $event['data']['object']['metadata']['user_id'] ) ? intval( $event['data']['object']['metadata']['user_id'] ) : 0;
 					if ( $user_id ) {
-						$this->expire_api_key( $user_id );
+							$this->expire_api_key( $user_id );
+							$this->expire_user_subscriptions_and_notify( $user_id, 'payment_failed' );
 					}
 					break;
 				default:
@@ -345,11 +393,65 @@ class SSM_Plugin {
 		exit();
 	}
 
-	public function process_successful_subscription( $user_id, $product_id ) {
+    /**
+     * Handle subscription renewal: extend valid_to and emit renewal webhooks.
+     * If productIds is empty, renew all active subscriptions for the user.
+     */
+    private function handle_subscription_renewal( $user_id, $productIds = array(), $payment_intent_id = null ) {
+        global $wpdb;
+        $table_subs     = $wpdb->prefix . 'ssm_user_subscriptions';
+        $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+        $target_products = array();
+        if ( is_array( $productIds ) && ! empty( $productIds ) ) {
+            $placeholders = implode( ',', array_fill( 0, count( $productIds ), '%d' ) );
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built safely above
+            $query = $wpdb->prepare( "SELECT id, subscription_interval FROM $table_products WHERE id IN ($placeholders)", ...$productIds );
+            $target_products = $wpdb->get_results( $query );
+        } else {
+            $subs = $wpdb->get_results( $wpdb->prepare( "SELECT product_id FROM $table_subs WHERE user_id = %d AND status = 'active'", $user_id ) );
+            if ( $subs ) {
+                $ids = array_map( function( $row ){ return intval( $row->product_id ); }, $subs );
+                if ( ! empty( $ids ) ) {
+                    $placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+                    // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built safely above
+                    $query = $wpdb->prepare( "SELECT id, subscription_interval FROM $table_products WHERE id IN ($placeholders)", ...$ids );
+                    $target_products = $wpdb->get_results( $query );
+                }
+            }
+        }
+        $max_new_expiry = null;
+        foreach ( (array) $target_products as $p ) {
+            $product_id = intval( $p->id );
+            $interval   = ( isset( $p->subscription_interval ) && $p->subscription_interval === 'yearly' ) ? 'yearly' : 'monthly';
+            $existing_valid_to = $wpdb->get_var( $wpdb->prepare( "SELECT valid_to FROM $table_subs WHERE user_id = %d AND product_id = %d", $user_id, $product_id ) );
+            $base_ts = time();
+            if ( $existing_valid_to ) {
+                $existing_ts = strtotime( $existing_valid_to );
+                $base_ts = max( time(), $existing_ts );
+            }
+            $new_expiry_ts = ( $interval === 'yearly' ) ? strtotime( '+1 year', $base_ts ) : strtotime( '+1 month', $base_ts );
+            $new_expiry_mysql = date( 'Y-m-d H:i:s', $new_expiry_ts );
+            $existing_sub_id = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table_subs WHERE user_id = %d AND product_id = %d", $user_id, $product_id ) );
+            if ( $existing_sub_id ) {
+                $wpdb->update( $table_subs, array( 'status' => 'active', 'valid_to' => $new_expiry_mysql ), array( 'id' => $existing_sub_id ) );
+            } else {
+                $wpdb->insert( $table_subs, array( 'user_id' => $user_id, 'product_id' => $product_id, 'status' => 'active', 'valid_to' => $new_expiry_mysql ) );
+            }
+            if ( is_null( $max_new_expiry ) || strtotime( $new_expiry_mysql ) > strtotime( $max_new_expiry ) ) {
+                $max_new_expiry = $new_expiry_mysql;
+            }
+            // Emit renewal webhook
+            $this->trigger_product_webhook( 'renewal', $user_id, $product_id, $payment_intent_id );
+        }
+        if ( $max_new_expiry ) {
+            update_user_meta( $user_id, 'ssm_api_key_expiry', $max_new_expiry );
+        }
+    }
+    public function process_successful_subscription( $user_id, $product_id, $payment_intent_id = null ) {
 		global $wpdb;
 		$table_products = $wpdb->prefix . self::PRODUCT_TABLE;
 		$product        = $wpdb->get_row( $wpdb->prepare(
-			"SELECT subscription_interval FROM $table_products WHERE id = %d",
+			"SELECT id, name, subscription_interval, webhook_purchase_url, webhook_cancel_url, webhook_secret FROM $table_products WHERE id = %d",
 			$product_id
 		) );
 		if ( ! $product ) {
@@ -395,6 +497,18 @@ class SSM_Plugin {
 				update_user_meta( $user_id, 'ssm_api_key_expiry', $expiration_date );
 			}
 		}
+
+		// Upsert subscription row
+		$table_subs = $wpdb->prefix . 'ssm_user_subscriptions';
+		$existing_sub = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table_subs WHERE user_id = %d AND product_id = %d", $user_id, $product_id ) );
+		if ( $existing_sub ) {
+			$wpdb->update( $table_subs, array( 'status' => 'active', 'valid_to' => $expiration_date ), array( 'id' => $existing_sub ) );
+		} else {
+			$wpdb->insert( $table_subs, array( 'user_id' => $user_id, 'product_id' => $product_id, 'status' => 'active', 'valid_to' => $expiration_date ) );
+		}
+
+        // Trigger purchase webhook if configured
+        $this->trigger_product_webhook( 'purchase', $user_id, $product_id, $payment_intent_id );
 	}
 
 	public function expire_api_key( $user_id ) {
@@ -407,6 +521,20 @@ class SSM_Plugin {
 				error_log( '[SSM] API key expiration failed: ' . $response->get_error_message() );
 			} else {
 				update_user_meta( $user_id, 'ssm_api_key_expiry', current_time( 'mysql' ) );
+			}
+		}
+	}
+
+	// Expire all user's subscriptions and notify cancel webhooks
+	public function expire_user_subscriptions_and_notify( $user_id, $reason = 'expired' ) {
+		global $wpdb;
+		$table_subs     = $wpdb->prefix . 'ssm_user_subscriptions';
+		$table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+		$subs = $wpdb->get_results( $wpdb->prepare( "SELECT product_id FROM $table_subs WHERE user_id = %d AND status = 'active'", $user_id ) );
+		if ( $subs ) {
+			foreach ( $subs as $sub ) {
+				$wpdb->update( $table_subs, array( 'status' => 'expired' ), array( 'user_id' => $user_id, 'product_id' => intval( $sub->product_id ) ) );
+				$this->trigger_product_webhook( 'cancel', $user_id, intval( $sub->product_id ), null );
 			}
 		}
 	}
@@ -550,6 +678,7 @@ class SSM_Plugin {
 		add_menu_page( 'SSM Manager', 'SSM Manager', 'manage_options', 'ssm_manager', array( $this, 'render_products_page' ), 'dashicons-cart', 58 );
 		add_submenu_page( 'ssm_manager', 'Products', 'Products', 'manage_options', 'ssm_products', array( $this, 'render_products_page' ) );
 		add_submenu_page( 'ssm_manager', 'Categories', 'Categories', 'manage_options', 'ssm_categories', array( $this, 'render_categories_page' ) );
+		add_submenu_page( 'ssm_manager', 'Settings', 'Settings', 'manage_options', 'ssm_settings', array( $this, 'render_ssm_settings_page' ) );
 		add_submenu_page( 'ssm_manager', 'API Key Management', 'API Keys', 'manage_options', 'ssm_api_keys', array( $this, 'render_api_keys_page' ) );
 		add_submenu_page( 'ssm_manager', 'Error Logs', 'Error Logs', 'manage_options', 'ssm_error_logs', array( $this, 'render_error_logs_page' ) );
 		add_submenu_page( 'ssm_manager', 'Instructions', 'Instructions', 'manage_options', 'ssm_instructions', array( $this, 'render_instructions_page' ) );
@@ -585,6 +714,9 @@ class SSM_Plugin {
 			$subscription_interval = sanitize_text_field( $_POST['subscription_interval'] );
 			$subscription_price    = floatval( $_POST['subscription_price'] );
 			$subscription_user_role = isset( $_POST['subscription_user_role'] ) ? sanitize_text_field( $_POST['subscription_user_role'] ) : '';
+			$webhook_purchase_url   = isset( $_POST['webhook_purchase_url'] ) ? esc_url_raw( $_POST['webhook_purchase_url'] ) : '';
+			$webhook_cancel_url     = isset( $_POST['webhook_cancel_url'] ) ? esc_url_raw( $_POST['webhook_cancel_url'] ) : '';
+			$webhook_secret         = isset( $_POST['webhook_secret'] ) ? sanitize_text_field( $_POST['webhook_secret'] ) : '';
 			$categories             = isset( $_POST['categories'] ) ? (array) $_POST['categories'] : array();
 
 			if ( $action === 'add' ) {
@@ -599,6 +731,9 @@ class SSM_Plugin {
 						'subscription_interval'  => $subscription_interval,
 						'subscription_price'     => $subscription_price,
 						'subscription_user_role' => $subscription_user_role,
+						'webhook_purchase_url'   => $webhook_purchase_url,
+						'webhook_cancel_url'     => $webhook_cancel_url,
+						'webhook_secret'         => $webhook_secret,
 					)
 				);
 				$new_product_id = $wpdb->insert_id;
@@ -625,6 +760,9 @@ class SSM_Plugin {
 						'subscription_interval'  => $subscription_interval,
 						'subscription_price'     => $subscription_price,
 						'subscription_user_role' => $subscription_user_role,
+						'webhook_purchase_url'   => $webhook_purchase_url,
+						'webhook_cancel_url'     => $webhook_cancel_url,
+						'webhook_secret'         => $webhook_secret,
 					),
 					array( 'id' => $product_id )
 				);
@@ -698,6 +836,25 @@ class SSM_Plugin {
                             <td>
                                 <input type="text" name="subscription_user_role" id="ssm_subscription_user_role" value="<?php echo $product ? esc_attr( $product->subscription_user_role ) : ''; ?>" placeholder="e.g., premium_member">
                                 <p class="description">Role to assign upon successful subscription (defaults to 'subscriber' if left blank).</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_webhook_purchase_url">Purchase Webhook URL</label></th>
+                            <td>
+                                <input type="url" name="webhook_purchase_url" id="ssm_webhook_purchase_url" value="<?php echo $product ? esc_attr( $product->webhook_purchase_url ) : ''; ?>" placeholder="https://example.com/webhooks/purchase">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_webhook_cancel_url">Cancel Webhook URL</label></th>
+                            <td>
+                                <input type="url" name="webhook_cancel_url" id="ssm_webhook_cancel_url" value="<?php echo $product ? esc_attr( $product->webhook_cancel_url ) : ''; ?>" placeholder="https://example.com/webhooks/cancel">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="ssm_webhook_secret">Webhook Secret</label></th>
+                            <td>
+                                <input type="text" name="webhook_secret" id="ssm_webhook_secret" value="<?php echo $product ? esc_attr( $product->webhook_secret ) : ''; ?>" placeholder="Optional signing secret for HMAC">
+                                <p class="description">Used to sign webhook payloads with HMAC (header X-SSM-Signature).</p>
                             </td>
                         </tr>
                         <tr>
@@ -977,6 +1134,7 @@ class SSM_Plugin {
             <p>Use the Products and Categories pages to add, edit, delete, and filter products and categories. Products include attributes such as name, description, price, digital flag, subscription flag, subscription interval, subscription price, and <strong>subscription user role</strong> (the role to assign when a subscription is purchased).</p>
             <h2>Shortcode Integration</h2>
             <p>Embed products in your posts/pages using the <code>[ssm_add_to_cart product_id="123"]</code> shortcode.</p>
+            <p><strong>Migration</strong>: You can migrate existing shortcodes to blocks from SSM Settings.</p>
             <h2>Checkout</h2>
             <p>Add the <code>[ssm_checkout]</code> shortcode to a page to display the cart summary, customer details fields (if not logged in), and a Stripe payment form.</p>
             <h2>Stripe Webhook & API Key Management</h2>
@@ -1006,8 +1164,186 @@ class SSM_Plugin {
 					$message = "Hello {$user->display_name},\n\nYour subscription is set to renew in {$days_left} day(s). Please review your plan details in your account.\n\nThanks,\nSubscription Service Manager Team";
 					wp_mail( $user->user_email, $subject, $message );
 				}
+				// If overdue, expire subs and notify
+				if ( $days_left < 0 ) {
+					$this->expire_user_subscriptions_and_notify( $user->ID, 'expired' );
+				}
+            }
+        }
+    }
+
+    // Gutenberg blocks registration
+    public function register_gutenberg_blocks() {
+        // Add-to-Cart block
+        register_block_type( __DIR__ . '/blocks/add-to-cart', array(
+            'render_callback' => function( $attributes ) {
+                $product_id = isset( $attributes['productId'] ) ? intval( $attributes['productId'] ) : 0;
+                return do_shortcode( '[ssm_add_to_cart product_id="' . $product_id . '"]' );
+            }
+        ) );
+        // Checkout block
+        register_block_type( __DIR__ . '/blocks/checkout', array(
+            'render_callback' => function() {
+                return do_shortcode( '[ssm_checkout]' );
+            }
+        ) );
+        // Subscription Account block
+        register_block_type( __DIR__ . '/blocks/subscription-account', array(
+            'render_callback' => function() {
+                return do_shortcode( '[ssm_subscription_account]' );
+            }
+        ) );
+    }
+
+	// AJAX: finalize payment after Stripe confirmation on the client
+	public function ajax_finalize_payment() {
+		if ( ob_get_length() ) { ob_end_clean(); }
+		$payment_intent_id = isset( $_POST['payment_intent_id'] ) ? sanitize_text_field( wp_unslash( $_POST['payment_intent_id'] ) ) : '';
+		if ( ! $payment_intent_id ) {
+			wp_send_json_error( 'Missing payment_intent_id.' );
+		}
+		$secret_key = get_option( 'flw_stripe_secret_key', '' );
+		if ( ! $secret_key ) {
+			wp_send_json_error( 'Stripe secret key not configured.' );
+		}
+		$ch = curl_init( 'https://api.stripe.com/v1/payment_intents/' . rawurlencode( $payment_intent_id ) );
+		curl_setopt( $ch, CURLOPT_USERPWD, $secret_key . ':' );
+		curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+		$response = curl_exec( $ch );
+		$error    = curl_error( $ch );
+		curl_close( $ch );
+		if ( $error ) {
+			wp_send_json_error( 'Stripe verify error: ' . $error );
+		}
+		$pi = json_decode( $response, true );
+		if ( ! is_array( $pi ) || ! isset( $pi['status'] ) || $pi['status'] !== 'succeeded' ) {
+			wp_send_json_error( 'Payment not verified as succeeded.' );
+		}
+		$user_id = get_current_user_id();
+		if ( ! $user_id && isset( $pi['metadata']['user_id'] ) ) {
+			$user_id = intval( $pi['metadata']['user_id'] );
+		}
+		if ( ! $user_id ) {
+			wp_send_json_error( 'Unable to determine user.' );
+		}
+		if ( empty( $_SESSION['ssm_cart'] ) || ! is_array( $_SESSION['ssm_cart'] ) ) {
+			wp_send_json_error( 'Cart is empty or missing.' );
+		}
+        foreach ( $_SESSION['ssm_cart'] as $product_id => $quantity ) {
+			$product_id = intval( $product_id );
+			if ( $product_id > 0 ) {
+                $this->process_successful_subscription( $user_id, $product_id, $payment_intent_id );
 			}
 		}
+		// Clear cart on success
+		unset( $_SESSION['ssm_cart'] );
+		wp_send_json_success( array( 'message' => 'Finalized' ) );
+	}
+
+	// Helper to deliver product webhooks with HMAC signing and basic retries
+	private function trigger_product_webhook( $event, $user_id, $product_id, $payment_intent_id = null ) {
+		global $wpdb;
+		$table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+		$product = $wpdb->get_row( $wpdb->prepare( "SELECT webhook_purchase_url, webhook_cancel_url, webhook_secret FROM $table_products WHERE id = %d", $product_id ) );
+		if ( ! $product ) { return; }
+		$url = '';
+        if ( $event === 'purchase' || $event === 'renewal' ) { $url = $product->webhook_purchase_url; }
+        if ( $event === 'cancel' ) { $url = $product->webhook_cancel_url; }
+		$url = is_string( $url ) ? trim( $url ) : '';
+		if ( empty( $url ) ) { return; }
+		$user      = get_userdata( $user_id );
+		$api_key   = get_user_meta( $user_id, 'ssm_api_key', true );
+		$valid_to  = get_user_meta( $user_id, 'ssm_api_key_expiry', true );
+		$occurred  = gmdate( 'c' );
+		$event_id  = wp_generate_uuid4();
+		$payload   = array(
+			'event'          => $event,
+			'user_id'        => $user_id,
+			'email'          => $user ? $user->user_email : '',
+			'product_id'     => $product_id,
+			'quantity'       => 1,
+			'api_key'        => $api_key,
+			'valid_to'       => $valid_to,
+			'transaction_id' => $payment_intent_id,
+			'occurred_at'    => $occurred,
+			'idempotency_id' => $event_id,
+		);
+		$body      = wp_json_encode( $payload );
+		$headers   = array(
+			'Content-Type'     => 'application/json',
+			'X-SSM-Event'      => $event,
+			'X-SSM-Idempotency'=> $event_id,
+		);
+        $secret = is_string( $product->webhook_secret ) ? trim( $product->webhook_secret ) : '';
+        if ( ! empty( $secret ) ) {
+            $signature = hash_hmac( 'sha256', $body, $secret );
+            $headers['X-SSM-Signature'] = 'sha256=' . $signature;
+        }
+		$attempts = 0;
+		$max_attempts = 3;
+		$timeout = 10;
+		do {
+			$attempts++;
+			$response = wp_remote_post( $url, array( 'headers' => $headers, 'body' => $body, 'timeout' => $timeout ) );
+			if ( ! is_wp_error( $response ) ) {
+				$status = wp_remote_retrieve_response_code( $response );
+				if ( $status >= 200 && $status < 300 ) { return; }
+			}
+			// simple backoff
+			usleep( 200000 * $attempts );
+		} while ( $attempts < $max_attempts );
+		error_log( '[SSM] Webhook delivery failed for event ' . $event . ' to URL ' . $url );
+	}
+
+    // REST API: products list for editor selectors
+    public function register_rest_routes() {
+        register_rest_route( 'ssm/v1', '/products', array(
+            'methods'             => 'GET',
+            'permission_callback' => function () { return current_user_can( 'edit_posts' ); },
+            'callback'            => function () {
+                global $wpdb;
+                $table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+                $rows = $wpdb->get_results( "SELECT id, name FROM $table_products ORDER BY name", ARRAY_A );
+                $out = array();
+                if ( is_array( $rows ) ) {
+                    foreach ( $rows as $row ) {
+                        $out[] = array( 'id' => intval( $row['id'] ), 'name' => $row['name'] );
+                    }
+                }
+                return rest_ensure_response( $out );
+            }
+        ) );
+    }
+
+	// Ensure DB schema upgrades when plugin updates
+	public function maybe_upgrade_schema() {
+		global $wpdb;
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		$table_products = $wpdb->prefix . self::PRODUCT_TABLE;
+		$cols = $wpdb->get_results( "SHOW COLUMNS FROM $table_products", ARRAY_A );
+		$col_names = wp_list_pluck( $cols, 'Field' );
+		if ( ! in_array( 'webhook_purchase_url', $col_names, true ) ) {
+			$wpdb->query( "ALTER TABLE $table_products ADD COLUMN webhook_purchase_url varchar(255) DEFAULT ''" );
+		}
+		if ( ! in_array( 'webhook_cancel_url', $col_names, true ) ) {
+			$wpdb->query( "ALTER TABLE $table_products ADD COLUMN webhook_cancel_url varchar(255) DEFAULT ''" );
+		}
+		if ( ! in_array( 'webhook_secret', $col_names, true ) ) {
+			$wpdb->query( "ALTER TABLE $table_products ADD COLUMN webhook_secret varchar(255) DEFAULT ''" );
+		}
+		$table_subs = $wpdb->prefix . 'ssm_user_subscriptions';
+		$charset_collate = $wpdb->get_charset_collate();
+		$sql = "CREATE TABLE $table_subs (
+		  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		  user_id bigint(20) unsigned NOT NULL,
+		  product_id mediumint(9) NOT NULL,
+		  status varchar(20) NOT NULL DEFAULT 'active',
+		  valid_to datetime NULL,
+		  created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  PRIMARY KEY (id),
+		  KEY user_product (user_id, product_id)
+		) $charset_collate;";
+		dbDelta( $sql );
 	}
 }
 
@@ -1027,3 +1363,38 @@ function ssm_enqueue_scripts() {
 add_action( 'wp_enqueue_scripts', 'ssm_enqueue_scripts' );
 
 new SSM_Plugin();
+
+// Admin-side migration utility shared by UI and WP-CLI
+function ssm_migrate_shortcodes_to_blocks() {
+    $post_types = get_post_types( array( 'public' => true ), 'names' );
+    $args = array(
+        'post_type'      => $post_types,
+        'post_status'    => array( 'publish', 'draft', 'pending', 'future', 'private' ),
+        'posts_per_page' => -1,
+    );
+    $q = new WP_Query( $args );
+    $updated = 0;
+    foreach ( $q->posts as $post ) {
+        $content  = $post->post_content;
+        $original = $content;
+        $content = preg_replace_callback( '/\\[ssm_add_to_cart\\s+product_id=\"(\\d+)\"\\s*\\]/i', function( $m ){
+            $id = intval( $m[1] );
+            return '<!-- wp:ssm/add-to-cart {"productId":' . $id . '} /-->';
+        }, $content );
+        $content = preg_replace( '/\\[ssm_checkout\\s*\\]/i', '<!-- wp:ssm/checkout /-->', $content );
+        $content = preg_replace( '/\\[ssm_subscription_account\\s*\\]/i', '<!-- wp:ssm/subscription-account /-->', $content );
+        if ( $content !== $original ) {
+            wp_update_post( array( 'ID' => $post->ID, 'post_content' => $content ) );
+            $updated++;
+        }
+    }
+    return $updated;
+}
+
+// WP-CLI: migrate shortcodes to blocks
+if ( defined( 'WP_CLI' ) && WP_CLI ) {
+    WP_CLI::add_command( 'ssm migrate-shortcodes', function () {
+        $updated = ssm_migrate_shortcodes_to_blocks();
+        WP_CLI::success( sprintf( 'Migrated content in %d posts.', $updated ) );
+    } );
+}

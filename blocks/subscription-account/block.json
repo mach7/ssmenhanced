@@ -1,0 +1,10 @@
+{
+  "apiVersion": 2,
+  "name": "ssm/subscription-account",
+  "title": "SSM: Subscription Account",
+  "category": "widgets",
+  "icon": "admin-users",
+  "description": "Show the user subscription/account info.",
+  "editorScript": "file:./index.js"
+}
+

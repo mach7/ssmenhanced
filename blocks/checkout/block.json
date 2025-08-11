@@ -1,0 +1,10 @@
+{
+  "apiVersion": 2,
+  "name": "ssm/checkout",
+  "title": "SSM: Checkout",
+  "category": "widgets",
+  "icon": "money",
+  "description": "Display the SSM checkout.",
+  "editorScript": "file:./index.js"
+}
+

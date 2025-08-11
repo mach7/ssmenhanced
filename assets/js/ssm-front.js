@@ -67,8 +67,25 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 } else {
                     if (result.paymentIntent && result.paymentIntent.status === 'succeeded') {
-                        alert('Payment successful! Thank you.');
-                        // Optionally, redirect or clear the cart.
+                        // Finalize on server: verify PaymentIntent and trigger post-payment processing
+                        const finalize = new FormData();
+                        finalize.append('action', 'ssm_finalize_payment');
+                        finalize.append('payment_intent_id', result.paymentIntent.id);
+                        fetch(ssm_params.ajax_url, { method: 'POST', credentials: 'same-origin', body: finalize })
+                          .then(r => r.json())
+                          .then(json => {
+                              if (!json.success) {
+                                  throw new Error(json.data || 'Finalize failed');
+                              }
+                              alert('Payment successful! Thank you.');
+                              // Optionally redirect
+                              // window.location.href = '/thank-you';
+                          })
+                          .catch(err => {
+                              console.error('Finalize error:', err);
+                              const errorDiv2 = document.getElementById('card-errors');
+                              if (errorDiv2) { errorDiv2.textContent = err.message; }
+                          });
                     }
                 }
             })

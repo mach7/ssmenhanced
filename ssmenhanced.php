@@ -2,10 +2,11 @@
 /*
 Plugin Name: Subscription Service Manager Enhanced
 Description: Enhanced plugin with product management, subscription management, Stripe webhook integration, API key management, error logging, instructions, checkout functionality, and account creation on checkout.
-Version: 1.7.0
-Author: Tyson Brooks
+Version: 1.8.0
+Author: FrostLine Works
 Author URI: https://frostlineworks.com
 Tested up to: 6.3
+Requires Plugins: flwsecureupdates
 */
 
 // Prevent direct access
@@ -27,58 +28,14 @@ function ssm_start_session() {
 }
 add_action( 'init', 'ssm_start_session', 1 );
 
-/*=============================================
-=      Plugin Loaded and Update Checker      =
-=============================================*/
-function ssm_update_plugins_filter( $transient ) {
-	global $ssm_plugin_file;
-	if ( isset( $transient->response ) ) {
-		foreach ( $transient->response as $plugin_slug => $plugin_data ) {
-			if ( $plugin_slug === plugin_basename( $ssm_plugin_file ) ) {
-				$icon_url = plugins_url( 'assets/logo-128x128.png', $ssm_plugin_file );
-				$transient->response[ $plugin_slug ]->icons = array(
-					'default' => $icon_url,
-					'1x'      => $icon_url,
-					'2x'      => plugins_url( 'assets/logo-256x256.png', $ssm_plugin_file ),
-				);
-			}
-		}
-	}
-	return $transient;
-}
-
-function ssm_admin_notice_no_flw_library() {
-	$pluginSlug = 'flwpluginlibrary/flwpluginlibrary.php';
-	$plugins    = get_plugins();
-	if ( ! isset( $plugins[ $pluginSlug ] ) ) {
-		echo '<div class="notice notice-error"><p>The FLW Plugin Library is not installed. Please install and activate it to enable update functionality.</p></div>';
-	} elseif ( ! is_plugin_active( $pluginSlug ) ) {
-		$activateUrl = wp_nonce_url(
-			admin_url( 'plugins.php?action=activate&plugin=' . $pluginSlug ),
-			'activate-plugin_' . $pluginSlug
-		);
-		echo '<div class="notice notice-error"><p>The FLW Plugin Library is installed but not active. Please <a href="' . esc_url( $activateUrl ) . '">activate</a> it to enable update functionality.</p></div>';
-	}
-}
 
 function ssm_admin_notice_flw_library_required() {
 	echo '<div class="notice notice-error"><p>The FLW Plugin Library must be activated for Subscription Service Manager Enhanced to work.</p></div>';
 }
 
 function ssm_plugins_loaded() {
-	// If the FLW Plugin Update Checker exists, initialize it and add our update filter.
-	if ( class_exists( 'FLW_Plugin_Update_Checker' ) ) {
-		$pluginSlug = basename( dirname( __FILE__ ) );
-		FLW_Plugin_Update_Checker::initialize( __FILE__, $pluginSlug );
-		add_filter( 'site_transient_update_plugins', 'ssm_update_plugins_filter' );
-	} else {
-		// Only show admin notices on non-AJAX requests.
-		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-			add_action( 'admin_notices', 'ssm_admin_notice_no_flw_library' );
-		}
-	}
+	
 
-	if ( class_exists( 'FLW_Plugin_Library' )) {
 		if ( ! ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
 			// Initialize plugin settings submenu via FLW_Plugin_Library.
 			// We define a class for settings.
@@ -102,7 +59,6 @@ function ssm_plugins_loaded() {
 			}
 			new SSM_Plugin_Settings();
 		}
-	}
 }
 add_action( 'plugins_loaded', 'ssm_plugins_loaded' );
 
